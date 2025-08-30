@@ -47,7 +47,7 @@ const NATIVE_SYMBOLS_BY_NETWORK = {
 
 // Token symbol normalizer/aliases
 const TOKEN_SYMBOL_ALIASES = {
-  'WETH':'ETH', 'WBNB':'BNB'
+  'WETH':'ETH', 'WBNB':'BNB', 'WBTC':'BTC', 'BTCB':'BTC'
 };
 function normalizeSymbol(sym) {
   if (!sym) return null;
@@ -144,25 +144,9 @@ function run_cold_wallets_balances_updater() {
     }
 
     const balances = {};
-    const add = (symbol, amount, network = null) => {
+    const add = (symbol, amount) => {
       if (!symbol || !isFinite(amount)) return;
-      
-      // Convert BTC to network-specific wrapped versions when fetching
-      let finalSymbol = symbol;
-      if (symbol === 'BTC' && network) {
-        switch (network.toUpperCase()) {
-          case 'BSC':
-            finalSymbol = 'BTCB';
-            break;
-          case 'ETH':
-            finalSymbol = 'WBTC';
-            break;
-          default:
-            finalSymbol = 'BTC';
-        }
-      }
-      
-      const key = normalizeSymbol(finalSymbol);
+      const key = normalizeSymbol(symbol);
       if (!key) return;
       balances[key] = (balances[key] || 0) + Number(amount);
     };
@@ -184,11 +168,11 @@ function run_cold_wallets_balances_updater() {
           case 'BSC': {
             const chain = net.toLowerCase();
             Logger.log(`  📊 Fetching ${net} native balance...`);
-            add(NATIVE_SYMBOLS_BY_NETWORK[net], cold_fetchEvmNative(asset.address, chain, net), net);
+            add(NATIVE_SYMBOLS_BY_NETWORK[net], cold_fetchEvmNative(asset.address, chain, net));
             
             Logger.log(`  🪙 Fetching ${net} tokens...`);
             const tokens = cold_fetchEvmTokens(asset.address, chain);
-            tokens.forEach(t => add(t.symbol, t.amount, net));
+            tokens.forEach(t => add(t.symbol, t.amount));
             break;
           }
           case 'BTC':
@@ -856,7 +840,66 @@ function onOpen() {
     .addToUi();
 }
 
-
+/**
+ * Get consolidated BTC balance including BTCB and WBTC from cold wallets
+ * @return {number} Total consolidated BTC balance
+ */
+function getConsolidatedBTCBalance() {
+  try {
+    Logger.log('🔄 Getting consolidated BTC balance from cold wallets (BTC + BTCB + WBTC)...');
+    
+    // Run the cold wallet updater to get fresh balances
+    run_cold_wallets_balances_updater();
+    
+    // Read the updated balances from the sheet
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Cold Wallet Balances');
+    if (!sheet) {
+      Logger.log('Cold Wallet Balances sheet not found');
+      return 0;
+    }
+    
+    const data = sheet.getDataRange().getValues();
+    let btcTotal = 0;
+    let btcbTotal = 0;
+    let wbtcTotal = 0;
+    
+    // Skip header row, process data rows
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      if (row.length >= 3) {
+        const symbol = row[1]; // Symbol column
+        const amount = parseFloat(row[2]) || 0; // Amount column
+        
+        if (symbol && amount > 0) {
+          switch (symbol.toUpperCase()) {
+            case 'BTC':
+              btcTotal += amount;
+              break;
+            case 'BTCB':
+              btcbTotal += amount;
+              break;
+            case 'WBTC':
+              wbtcTotal += amount;
+              break;
+          }
+        }
+      }
+    }
+    
+    const totalBTC = btcTotal + btcbTotal + wbtcTotal;
+    
+    Logger.log('📊 Cold Wallet BTC-related balances:');
+    Logger.log(`  BTC: ${btcTotal}`);
+    Logger.log(`  BTCB: ${btcbTotal}`);
+    Logger.log(`  WBTC: ${wbtcTotal}`);
+    Logger.log(`  Total consolidated BTC: ${totalBTC}`);
+    
+    return totalBTC;
+  } catch (error) {
+    Logger.log(`Error getting consolidated BTC balance: ${error.message}`);
+    return 0;
+  }
+}
 
 function createHourlyTrigger() {
   ScriptApp.newTrigger('run_cold_wallets_balances_updater')

@@ -25,9 +25,9 @@ const API_CREDENTIALS = {
   }
 };
 
-// Token symbol normalizer/aliases
+// Token symbol normalizer/aliases for BTC-related tokens
 const TOKEN_SYMBOL_ALIASES = {
-  'WETH':'ETH', 'WBNB':'BNB'
+  'WETH':'ETH', 'WBNB':'BNB', 'WBTC':'BTC', 'BTCB':'BTC'
 };
 
 // List of currencies to include in the sheet
@@ -250,14 +250,8 @@ function getSubAccountBalances(subUserId, accountNumber) {
  */
 function mergeBalances(target, source) {
   for (const [currency, amount] of Object.entries(source)) {
-    // Convert BTC to WBTC for KuCoin (centralized exchange)
-    let finalCurrency = currency;
-    if (currency === 'BTC') {
-      finalCurrency = 'WBTC';
-    }
-    
     // Normalize the currency symbol to handle BTC-related tokens
-    const normalizedCurrency = normalizeSymbol(finalCurrency);
+    const normalizedCurrency = normalizeSymbol(currency);
     
     if (!target[normalizedCurrency]) {
       target[normalizedCurrency] = 0;
@@ -477,7 +471,34 @@ function getAccountBalance(accountNumber, currency = "USDT") {
   }
 }
 
-
+/**
+ * Get consolidated BTC balance including BTCB and WBTC
+ * @return {number} Total consolidated BTC balance
+ */
+function getConsolidatedBTCBalance() {
+  try {
+    console.log('🔄 Getting consolidated BTC balance (BTC + BTCB + WBTC)...');
+    
+    const balances = getAllBalancesFromAllAccounts();
+    
+    const btcBalance = balances['BTC'] || 0;
+    const btcbBalance = balances['BTCB'] || 0;
+    const wbtcBalance = balances['WBTC'] || 0;
+    
+    const totalBTC = btcBalance + btcbBalance + wbtcBalance;
+    
+    console.log('📊 BTC-related balances:');
+    console.log(`  BTC: ${btcBalance}`);
+    console.log(`  BTCB: ${btcbBalance}`);
+    console.log(`  WBTC: ${wbtcBalance}`);
+    console.log(`  Total consolidated BTC: ${totalBTC}`);
+    
+    return totalBTC;
+  } catch (error) {
+    console.error('Error getting consolidated BTC balance:', error);
+    return 0;
+  }
+}
 
 /**
  * Test function for quick testing
@@ -485,7 +506,7 @@ function getAccountBalance(accountNumber, currency = "USDT") {
 function test() {
   console.log('BTC Total:', KucoinBalance("BTC"));
   console.log('USDT Total:', KucoinBalance("USDT"));
-  console.log('WBTC Total:', KucoinBalance("WBTC"));
+  console.log('Consolidated BTC Total:', getConsolidatedBTCBalance());
 }
 
 /**
