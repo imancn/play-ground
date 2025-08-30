@@ -152,22 +152,35 @@ function run_cold_wallets_balances_updater() {
   const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
 
   // Pre-fill ordered tokens
-  const inOrder = TOKENS_ORDER.map(tok => [tok, Number(balances[tok] || 0), now]);
+  const inOrder = TOKENS_ORDER.map(tok => [now, tok, Number(balances[tok] || 0)]);
 
   // Append any extra discovered tokens not present in TOKENS_ORDER
   const extras = Object.keys(balances)
     .filter(k => !TOKENS_ORDER.includes(k))
     .sort()
-    .map(tok => [tok, Number(balances[tok] || 0), now]);
+    .map(tok => [now, tok, Number(balances[tok] || 0)]);
 
   const rows = inOrder.concat(extras);
 
+  // Set headers if sheet is empty
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, 3).setValues([["Date", "Token", "Balance"]]);
+    sheet.getRange(1, 1, 1, 3).setFontWeight("bold");
+  }
+  
   if(sheet.getLastRow() > 1) {
     sheet.getRange(2,1,sheet.getLastRow()-1,3).clearContent();
   }
   if (rows.length) {
     sheet.getRange(2,1,rows.length,3).setValues(rows);
   }
+  
+  // Sort sheet by Token then Date to keep tokens grouped and maintain order
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, 3).sort([{column: 2, ascending: true}, {column: 1, ascending: false}]);
+  }
+  
   Logger.log("Balances (native + tokens) updated successfully!");
 }
 

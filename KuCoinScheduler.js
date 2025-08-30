@@ -348,7 +348,7 @@ function createOrUpdateBalanceSheet(sheetName = "KuCoin Balances") {
   sheet.clear();
   
   // Set up headers
-  const headers = ["Currency", "Balance", "Updated At"];
+  const headers = ["Date", "Token", "Balance"];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight("bold");
   
   // Get current balances
@@ -359,7 +359,7 @@ function createOrUpdateBalanceSheet(sheetName = "KuCoin Balances") {
   const data = [];
   for (const currency of CURRENCY_LIST) {
     const balance = balances[currency] || 0;
-    data.push([currency, balance, now]);
+    data.push([now, currency, balance]);
   }
   
   // Write data to sheet
@@ -368,7 +368,10 @@ function createOrUpdateBalanceSheet(sheetName = "KuCoin Balances") {
     
     // Format the sheet
     sheet.autoResizeColumns(1, headers.length);
-    sheet.getRange(2, 3, data.length, 1).setNumberFormat("yyyy-mm-dd hh:mm:ss");
+    sheet.getRange(2, 1, data.length, 1).setNumberFormat("yyyy-mm-dd hh:mm:ss");
+    
+    // Sort sheet by Token then Date to keep tokens grouped and maintain order
+    sheet.getRange(2, 1, data.length, headers.length).sort([{column: 2, ascending: true}, {column: 1, ascending: false}]);
     
     console.log(`Updated ${sheetName} with ${data.length} currencies`);
   }
