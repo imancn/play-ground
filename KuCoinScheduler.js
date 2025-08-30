@@ -368,7 +368,12 @@ function createOrUpdateBalanceSheet(sheetName = "KuCoin Balances") {
     
     // Format the sheet
     sheet.autoResizeColumns(1, headers.length);
+    
+    // Format Date column (Column A) as date
     sheet.getRange(2, 1, data.length, 1).setNumberFormat("yyyy-mm-dd hh:mm:ss");
+    
+    // Format Balance column (Column C) as decimal number with 8 decimal places
+    sheet.getRange(2, 3, data.length, 1).setNumberFormat("#,##0.00000000");
     
     // Sort sheet by Token then Date to keep tokens grouped and maintain order
     sheet.getRange(2, 1, data.length, headers.length).sort([{column: 2, ascending: true}, {column: 1, ascending: false}]);
