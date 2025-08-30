@@ -15,25 +15,54 @@ function fetchAndUpdatePrices(tokenList) {
     throw new Error("tokenList must be a non-empty array of token symbols.");
   }
   
-  // Prepare the symbols string
-  var symbols = tokenList.join(",");
-  var url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=" + encodeURIComponent(symbols) + "&convert=USD";
+  // Batch size to avoid URL length limits (CMC API has limits)
+  var BATCH_SIZE = 100;
+  var allTokenData = {};
+  
+  // Process tokens in batches
+  for (var i = 0; i < tokenList.length; i += BATCH_SIZE) {
+    var batch = tokenList.slice(i, i + BATCH_SIZE);
+    console.log("Processing batch " + Math.floor(i/BATCH_SIZE + 1) + " with " + batch.length + " tokens");
+    
+    // Prepare the symbols string for this batch
+    var symbols = batch.join(",");
+    var url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=" + encodeURIComponent(symbols) + "&convert=USD";
 
-  var options = {
-    method: "get",
-    headers: {
-      "X-CMC_PRO_API_KEY": API_KEY,
-      "Accept": "application/json"
-    },
-    muteHttpExceptions: true
-  };
+    var options = {
+      method: "get",
+      headers: {
+        "X-CMC_PRO_API_KEY": API_KEY,
+        "Accept": "application/json"
+      },
+      muteHttpExceptions: true
+    };
 
-  var response = UrlFetchApp.fetch(url, options);
-  var responseCode = response.getResponseCode && response.getResponseCode();
-  if (responseCode && responseCode !== 200) {
-    Logger.log("CMC symbol request returned " + responseCode + ": " + String(response.getContentText()).slice(0, 1000));
+    try {
+      var response = UrlFetchApp.fetch(url, options);
+      var responseCode = response.getResponseCode && response.getResponseCode();
+      if (responseCode && responseCode !== 200) {
+        Logger.log("CMC symbol request returned " + responseCode + ": " + String(response.getContentText()).slice(0, 1000));
+        continue; // Skip this batch if it fails
+      }
+      var data = JSON.parse(response.getContentText());
+      
+      // Merge data from this batch
+      if (data && data.data) {
+        for (var symbol in data.data) {
+          allTokenData[symbol] = data.data[symbol];
+        }
+      }
+      
+      // Add a small delay between batches to be respectful to the API
+      if (i + BATCH_SIZE < tokenList.length) {
+        Utilities.sleep(100);
+      }
+      
+    } catch (batchError) {
+      Logger.log("Error processing batch starting with " + batch[0] + ": " + batchError);
+      continue; // Continue with next batch
+    }
   }
-  var data = JSON.parse(response.getContentText());
 
   // Prefetch slug-based quotes to disambiguate symbols like BBL
   var slugPriceMap = {};
@@ -45,18 +74,29 @@ function fetchAndUpdatePrices(tokenList) {
         uniqueSlugObj[String(slugsToPrefetch[si]).toLowerCase()] = true;
       }
       var uniqueSlugs = Object.keys(uniqueSlugObj);
-      var slugUrl = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?slug=" + encodeURIComponent(uniqueSlugs.join(",")) + "&convert=USD";
-      var slugResp = UrlFetchApp.fetch(slugUrl, options);
-      var slugRespCode = slugResp.getResponseCode && slugResp.getResponseCode();
-      if (slugRespCode && slugRespCode !== 200) {
-        Logger.log("CMC slug prefetch returned " + slugRespCode + ": " + String(slugResp.getContentText()).slice(0, 1000));
-      }
-      var slugData = JSON.parse(slugResp.getContentText());
-      var slugKeys = (slugData && slugData.data) ? Object.keys(slugData.data) : [];
-      for (var sj = 0; sj < slugKeys.length; sj++) {
-        var sobj = slugData.data[slugKeys[sj]];
-        if (sobj && sobj.slug && sobj.quote && sobj.quote.USD && typeof sobj.quote.USD.price === "number") {
-          slugPriceMap[String(sobj.slug).toLowerCase()] = sobj.quote.USD.price;
+      
+      // Process slugs in batches too
+      for (var j = 0; j < uniqueSlugs.length; j += BATCH_SIZE) {
+        var slugBatch = uniqueSlugs.slice(j, j + BATCH_SIZE);
+        var slugUrl = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?slug=" + encodeURIComponent(slugBatch.join(",")) + "&convert=USD";
+        var slugResp = UrlFetchApp.fetch(slugUrl, options);
+        var slugRespCode = slugResp.getResponseCode && slugResp.getResponseCode();
+        if (slugRespCode && slugRespCode !== 200) {
+          Logger.log("CMC slug prefetch returned " + slugRespCode + ": " + String(slugResp.getContentText()).slice(0, 1000));
+          continue;
+        }
+        var slugData = JSON.parse(slugResp.getContentText());
+        var slugKeys = (slugData && slugData.data) ? Object.keys(slugData.data) : [];
+        for (var sj = 0; sj < slugKeys.length; sj++) {
+          var sobj = slugData.data[slugKeys[sj]];
+          if (sobj && sobj.slug && sobj.quote && sobj.quote.USD && typeof sobj.quote.USD.price === "number") {
+            slugPriceMap[String(sobj.slug).toLowerCase()] = sobj.quote.USD.price;
+          }
+        }
+        
+        // Add delay between slug batches
+        if (j + BATCH_SIZE < uniqueSlugs.length) {
+          Utilities.sleep(100);
         }
       }
     }
@@ -94,7 +134,7 @@ function fetchAndUpdatePrices(tokenList) {
         var pslug = slugPriceMap[preferredSlug];
         priceStr = pslug.toFixed(20).replace(/0+$/, "").replace(/\.$/, "");
       } else {
-        var tokenData = (data && data.data) ? data.data[symbol] : null;
+        var tokenData = allTokenData[symbol];
         if (Array.isArray(tokenData)) {
           var desiredSlug = (SYMBOL_TO_SLUG[symbol] || "").toLowerCase();
           var desiredName = (SYMBOL_TO_NAME[symbol] || "").toLowerCase();
