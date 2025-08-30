@@ -207,6 +207,12 @@ function fetchAndUpdatePrices(tokenList) {
   // Sort sheet by Token then Date to keep tokens grouped
   lastRow = sheet.getLastRow();
   if (lastRow > 1) {
+    // Format Date column (Column A) as date
+    sheet.getRange(2, 1, lastRow - 1, 1).setNumberFormat("yyyy-mm-dd hh:mm:ss");
+    
+    // Format Price column (Column C) as decimal number with 8 decimal places
+    sheet.getRange(2, 3, lastRow - 1, 1).setNumberFormat("#,##0.00000000");
+    
     sheet.getRange(2, 1, lastRow - 1, 3).sort([{column: 2, ascending: true}, {column: 1, ascending: true}]);
   }
 }
