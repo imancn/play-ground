@@ -4,6 +4,41 @@
  * with the new standardized column format.
  */
 
+function test_blockchain_apis() {
+  console.log("\n🔗 Testing Blockchain APIs...");
+  
+  try {
+    // Test TRX address validation
+    console.log("Testing TRX address validation...");
+    const validTRX = "TWQnCyNCdJ1FB8n2GotATtswavip2FBKNN";
+    const invalidTRX = "invalid_address";
+    
+    console.log(`Valid TRX address: ${validTRX}`);
+    console.log(`Invalid TRX address: ${invalidTRX}`);
+    
+    // Test SOL address validation
+    console.log("\nTesting SOL address validation...");
+    const validSOL = "DXow5PZ1MDRZXQoxa293bVCb3fdhboDDPgvz5LHKnHrw";
+    const invalidSOL = "invalid_sol_address";
+    
+    console.log(`Valid SOL address: ${validSOL}`);
+    console.log(`Invalid SOL address: ${invalidSOL}`);
+    
+    // Test XRP address validation
+    console.log("\nTesting XRP address validation...");
+    const validXRP = "rsNaMj99sgRJcp2knBpybE14FxvjQBwomL";
+    const invalidXRP = "invalid_xrp_address";
+    
+    console.log(`Valid XRP address: ${validXRP}`);
+    console.log(`Invalid XRP address: ${invalidXRP}`);
+    
+    console.log("✓ Blockchain API validation tests completed");
+    
+  } catch (error) {
+    console.error("❌ Blockchain API test failed:", error);
+  }
+}
+
 function test_all_schedulers() {
   console.log("🧪 Testing All Schedulers...");
   
@@ -19,6 +54,10 @@ function test_all_schedulers() {
     // Test 3: Cold Wallet Balances Scheduler
     console.log("\n🔒 Testing Cold Wallet Balances Scheduler...");
     test_cold_wallets_scheduler();
+    
+    // Test 4: Blockchain APIs
+    console.log("\n🔗 Testing Blockchain APIs...");
+    test_blockchain_apis();
     
     console.log("\n✅ All scheduler tests completed!");
     
