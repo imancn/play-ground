@@ -46,13 +46,13 @@ const NATIVE_SYMBOLS_BY_NETWORK = {
 };
 
 // Token symbol normalizer/aliases
-const TOKEN_SYMBOL_ALIASES = {
+const COLD_WALLET_TOKEN_ALIASES = {
   'WETH':'ETH', 'WBNB':'BNB'
 };
-function normalizeSymbol(sym) {
+function normalizeColdWalletSymbol(sym) {
   if (!sym) return null;
   const s = String(sym).trim().toUpperCase();
-  return TOKEN_SYMBOL_ALIASES[s] || s;
+  return COLD_WALLET_TOKEN_ALIASES[s] || s;
 }
 
 // ======= SAFE FETCH / JSON HELPERS =======
@@ -162,7 +162,7 @@ function run_cold_wallets_balances_updater() {
         }
       }
       
-      const key = normalizeSymbol(finalSymbol);
+      const key = normalizeColdWalletSymbol(finalSymbol);
       if (!key) return;
       balances[key] = (balances[key] || 0) + Number(amount);
     };
@@ -361,7 +361,7 @@ function cold_fetchEvmTokens(address, chain) {
       .map(t => {
         try {
           const decimals = Number(t.decimals || 0);
-          const sym = normalizeSymbol(t.symbol);
+          const sym = normalizeColdWalletSymbol(t.symbol);
           const amt = Number(t.balance || 0) / Math.pow(10, decimals);
           return { symbol: sym, amount: amt };
         } catch (e) {
@@ -502,7 +502,7 @@ function cold_fetchTRXTokens(address) {
     const tokens = list.map(t => {
       try {
         const decimals = Number(t.tokenDecimal || t.decimals || 0);
-        const sym = normalizeSymbol(t.symbol || t.tokenAbbr);
+        const sym = normalizeColdWalletSymbol(t.symbol || t.tokenAbbr);
         const raw = typeof t.balance === 'string' ? Number(t.balance) : Number(t.balance || t.tokenBalance || 0);
         const amt = raw / Math.pow(10, decimals);
         return { symbol: sym, amount: amt };
@@ -612,11 +612,11 @@ function cold_fetchSOLTokens(address) {
         if (!mint || !ui) return;
         
         let meta = jupMap[mint];
-        let symbol = normalizeSymbol(meta ? meta.symbol : null);
+        let symbol = normalizeColdWalletSymbol(meta ? meta.symbol : null);
         
         if (!symbol) {
           meta = getSolscanTokenMeta(mint);
-          symbol = normalizeSymbol(meta ? meta.symbol : null);
+                      symbol = normalizeColdWalletSymbol(meta ? meta.symbol : null);
         }
         
         if (symbol && ui > 0) out.push({ symbol, amount: ui });
@@ -696,7 +696,7 @@ function cold_fetchADATokens(address) {
       const unit = a.unit;
       const meta = fetchJson(`https://cardano-mainnet.blockfrost.io/api/v0/assets/${unit}`, options, {});
       const decimals = Number((meta.onchain_metadata && meta.onchain_metadata.decimals) || (meta.decimals) || 0);
-      const symbol = normalizeSymbol((meta.onchain_metadata && (meta.onchain_metadata.ticker || meta.onchain_metadata.name)) || (meta.metadata && meta.metadata.ticker));
+              const symbol = normalizeColdWalletSymbol((meta.onchain_metadata && (meta.onchain_metadata.ticker || meta.onchain_metadata.name)) || (meta.metadata && meta.metadata.ticker));
       const amt = Number(a.quantity || 0) / Math.pow(10, decimals);
       if (symbol && amt > 0) out.push({symbol, amount: amt});
     } catch(e) {}
@@ -719,7 +719,7 @@ function cold_fetchTONJettons(address) {
   const list = resp.balances || resp.jettons || [];
   return list.map(j => {
     const decimals = Number((j.jetton && j.jetton.decimals) || 0);
-    const sym = normalizeSymbol(j.jetton && j.jetton.symbol);
+            const sym = normalizeColdWalletSymbol(j.jetton && j.jetton.symbol);
     const amt = Number(j.balance || 0) / Math.pow(10, decimals);
     return {symbol: sym, amount: amt};
   }).filter(t => t.symbol && t.amount > 0);
@@ -835,13 +835,13 @@ function cold_fetchXRPAll(address) {
 
 function decodeXrpCurrencyCode(code) {
   if (!code) return null;
-  if (/^[A-Za-z0-9]{3,6}$/.test(code)) return normalizeSymbol(code);
+        if (/^[A-Za-z0-9]{3,6}$/.test(code)) return normalizeColdWalletSymbol(code);
   if (/^[A-F0-9]{40}$/i.test(code)) {
     try {
       const bytes = code.match(/.{1,2}/g).map(h => parseInt(h,16));
       let s = '';
       for (var i=0;i<bytes.length;i++) if (bytes[i] !== 0) s += String.fromCharCode(bytes[i]);
-      return normalizeSymbol(s);
+      return normalizeColdWalletSymbol(s);
     } catch(e) { return null; }
   }
   return null;

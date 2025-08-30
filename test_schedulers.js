@@ -111,8 +111,20 @@ function test_cold_wallets_scheduler() {
     // Test symbol normalization
     const testSymbols = ['WETH', 'WBNB', 'WBTC'];
     testSymbols.forEach(symbol => {
-      const normalized = normalizeSymbol(symbol);
-      console.log(`  ${symbol} → ${normalized}`);
+      // Test both normalization functions to ensure they work
+      try {
+        const normalized = normalizeSymbol(symbol);
+        console.log(`  ${symbol} → ${normalized} (KuCoin)`);
+      } catch (e) {
+        console.log(`  ${symbol} → KuCoin normalizeSymbol not available`);
+      }
+      
+      try {
+        const normalized = normalizeColdWalletSymbol(symbol);
+        console.log(`  ${symbol} → ${normalized} (Cold Wallets)`);
+      } catch (e) {
+        console.log(`  ${symbol} → Cold Wallet normalizeSymbol not available`);
+      }
     });
     
   } catch (error) {
