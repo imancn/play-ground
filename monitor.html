@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#3b82f6">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="apple-touch-icon" href="https://www.google.com/images/icons/product/sheets-192.png">
+<link rel="manifest" href='data:application/manifest+json,{"name":"Sheets Monitor","short_name":"Sheets Monitor","start_url":".","display":"standalone","background_color":"#f8f9fa","theme_color":"#3b82f6","icons":[{"src":"https://www.google.com/images/icons/product/sheets-192.png","sizes":"192x192","type":"image/png"},{"src":"https://www.google.com/images/icons/product/sheets-512.png","sizes":"512x512","type":"image/png"}]}' >
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@700&display=swap" rel="stylesheet">
+<title>Sheets Monitor</title>
+<style>
+    body, html {
+        height: 100%;
+        font-family: 'Open Sans', sans-serif;
+        font-weight: 700;
+        margin: 0;
+        padding: 0;
+        color: #111827;
+        background-color: #f3f4f6;
+        overflow: hidden;
+    }
+
+    .layout { display: flex; min-height: 100vh; height: 100vh; overflow: hidden; }
+
+    .sidebar {
+        width: 280px;
+        background: #ffffff;
+        color: #111827;
+        padding: 16px 0;
+        border-right: 1px solid #e5e7eb;
+        position: fixed;
+        left: 0;
+        top: 0;
+        height: 100vh;
+        transform: translateX(0);
+        transition: transform 0.25s ease-in-out;
+        overflow-y: auto;
+    }
+    .sidebar.hidden { transform: translateX(-100%); }
+
+    /* content pushed when sidebar visible on desktop */
+    @media (min-width: 769px) {
+        .content { margin-left: 280px; }
+        .content.collapsed { margin-left: 72px; }
+        .content.expanded { margin-left: 0; }
+    }
+
+    @media (max-width: 768px) {
+        .sidebar { width: 240px; }
+        .content { margin-left: 0; }
+    }
+
+    .sidebar-header { padding: 0 16px 12px; border-bottom: 1px solid #e5e7eb; margin-bottom: 8px; position: sticky; top: 0; background: #ffffff; z-index: 2; }
+    .sidebar-header h1 { font-size: 16px; margin: 12px 0 4px; }
+    /* Collapsed sidebar (desktop Telegram-style) */
+    .sidebar.collapsed { width: 72px; }
+    .sidebar.collapsed .sidebar-header h1 { display: none; }
+    .sidebar.collapsed .menu-heading { display: none; }
+    .sidebar.collapsed .menu-item { justify-content: center; }
+    .sidebar.collapsed .menu-item .chevron { display: none; }
+    .sidebar.collapsed .menu-item span:not(.menu-item-icon) { display: none; }
+    .sidebar.collapsed .sheet-item { justify-content: center; }
+    .sidebar.collapsed .sheet-item span:not(.menu-item-icon) { display: none; }
+    .sidebar.collapsed .submenu { display: none !important; }
+
+    .sheet-list { max-height: none; }
+
+    /* Menu */
+    .menu-section { padding: 8px 12px; }
+    .menu-heading { color: #6b7280; font-size: 12px; letter-spacing: .02em; text-transform: uppercase; margin: 8px 4px; }
+    .menu-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: none; background: transparent; width: 100%; text-align: left; cursor: pointer; border-radius: 8px; color: inherit; }
+    .menu-item:hover { background: #f3f4f6; }
+    .menu-item-icon { width: 28px; height: 28px; border-radius: 6px; background: #e5e7eb; color: #374151; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; }
+    .menu-item .chevron { margin-left: auto; color: #6b7280; }
+    .submenu { display: none; padding-left: 40px; }
+    .submenu .submenu-item { display: block; width: 100%; padding: 8px 0; background: transparent; border: none; text-align: left; color: #111827; cursor: pointer; }
+
+    /* Sheet items */
+    .sheet-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; cursor: pointer; }
+    .sheet-item:hover { background-color: #f3f4f6; }
+    .sheet-item.active { background-color: #e5e7eb; }
+
+    .content {
+        flex: 1;
+        padding: 12px 16px 16px;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
+    }
+
+    /* Top bar */
+    .topbar { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); margin-bottom: 8px; position: sticky; top: 0; z-index: 10; }
+    .topbar .topbar-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; margin: 0; border-radius: 0; }
+    .topbar-progress.hidden { display: none; }
+    .progress-bar { width: 40%; height: 100%; background: #3b82f6; animation: indeterminate 1s infinite ease-in-out; }
+    @keyframes indeterminate { 0% { margin-left: -40%; } 50% { margin-left: 20%; } 100% { margin-left: 100%; } }
+
+    .topbar .titles { display: flex; flex-direction: column; }
+    #sheetTitle { margin: 0; font-size: 18px; color: #111827; }
+    #sheetSubtitle { margin: 2px 0 0; font-size: 12px; color: #6b7280; }
+    .status-message { padding: 6px 10px; border-radius: 8px; border-left: 4px solid; font-size: 12px; margin-left: auto; }
+    .status-loading { background-color: #eff6ff; border-color: #3b82f6; color: #1d4ed8; }
+    .status-success { background-color: #f0fff4; border-color: #10b981; color: #065f46; }
+    .status-error { background-color: #fff5f5; border-color: #ef4444; color: #991b1b; }
+
+    .burger-btn { position: static; background: #3b82f6; color: #fff; border: none; font-size: 20px; width: 36px; height: 36px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+    .burger-btn:hover { opacity: 0.9; }
+
+    /* Filters + table should fill below */
+    .filter-container { display: none; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; padding: 10px; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; }
+    .filter-group { display: flex; flex-direction: column; min-width: 200px; }
+    .filter-label { margin-bottom: 5px; font-size: 12px; color: #374151; }
+    .filter-input { padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; }
+    .time-filter { display: flex; gap: 5px; }
+    .time-filter input { flex: 1; }
+    .suggestion-list { position: absolute; background: white; border: 1px solid #ddd; max-height: 200px; overflow-y: auto; z-index: 1000; width: 200px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    .suggestion-item { padding: 8px; cursor: pointer; border-bottom: 1px solid #eee; }
+    .suggestion-item:hover { background: #f0f0f0; }
+    .suggestion-count { float: right; color: #999; font-size: 12px; }
+
+    #sheetTable { flex: 1; overflow: auto; min-height: 0; }
+    .table-container { background: #ffffff; border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); border: 1px solid #e5e7eb; overflow: hidden; }
+    .table-scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+    .data-table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+    .data-table thead th { position: sticky; top: 0; z-index: 1; background: #f9fafb; padding: 12px; text-align: left; color: #374151; border-bottom: 1px solid #e5e7eb; font-size: 12px; }
+    .data-table td { padding: 12px; border-bottom: 1px solid #f3f4f6; color: #111827; font-size: 13px; }
+    .data-table tr:hover { background-color: #f9fafb; }
+
+    .pagination { display: flex; justify-content: center; gap: 8px; margin: 10px 0 0; padding: 12px 14px; background: white; border-radius: 12px; border: 1px solid #e5e7eb; }
+    .pagination button { padding: 8px 12px; border: 1px solid #e5e7eb; background: white; cursor: pointer; border-radius: 6px; }
+    .pagination button:hover:not(:disabled) { background: #3b82f6; color: white; border-color: #3b82f6; }
+    .pagination button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+    .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="layout">
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h1>Sheets Monitor</h1>
+        </div>
+
+        <div class="menu-section">
+            <div class="menu-heading">Actions</div>
+            <button class="menu-item" onclick="fetchData()">
+                <span class="menu-item-icon">⇅</span>
+                <span>Fetch Data</span>
+            </button>
+            <button class="menu-item" onclick="refreshData()">
+                <span class="menu-item-icon">↻</span>
+                <span>Refresh Data</span>
+            </button>
+            <button class="menu-item" onclick="toggleSubmenu('downloadMenu')">
+                <span class="menu-item-icon">↓</span>
+                <span>Download</span>
+                <span class="chevron">▼</span>
+            </button>
+            <div id="downloadMenu" class="submenu">
+                <button class="submenu-item" onclick="downloadData('csv')">CSV</button>
+                <button class="submenu-item" onclick="downloadData('json')">JSON</button>
+                <button class="submenu-item" onclick="downloadData('md')">Markdown</button>
+            </div>
+            <button class="menu-item" onclick="document.getElementById('fileInput').click()">
+                <span class="menu-item-icon">↑</span>
+                <span>Upload CSV</span>
+            </button>
+            <input type="file" id="fileInput" class="hidden" accept=".csv" onchange="handleFileUpload(this.files)">
+        </div>
+
+        <div class="menu-section">
+            <div class="menu-heading">Tables</div>
+            <div class="sheet-list" id="sheetMenu">
+                <div class="sheet-item" style="opacity:0.8;">
+                    <span class="menu-item-icon">…</span>
+                    Loading sheets...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="content" id="content">
+        <div class="topbar">
+            <button id="menuToggle" class="burger-btn" onclick="toggleSidebar()">☰</button>
+            <div class="titles">
+                <h2 id="sheetTitle">Overview</h2>
+                <p id="sheetSubtitle">Select a sheet to view data</p>
+            </div>
+            <div id="statusMessage"></div>
+            <div class="topbar-progress hidden" id="topbarProgress"><div class="progress-bar"></div></div>
+        </div>
+
+        <div id="filterContainer" class="filter-container"></div>
+        <div id="sheetTable"></div>
+        <div id="pagination" class="pagination" style="display:none;"></div>
+    </div>
+</div>
+
+<script>
+    // Global variables
+    let currentSheet = null;
+    let sheetsCache = {};
+    let currentPage = 1;
+    let rowsPerPage = 50;
+    let filteredData = [];
+    let filterValues = {};
+    let timeFilters = {};
+    let suggestionTimeouts = {};
+
+    // Utils
+    function escapeHtml(s) {
+        if (s === null || s === undefined) return '';
+        return s.toString()
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    function showStatus(msg, type = 'info') {
+        const el = document.getElementById('statusMessage');
+        el.innerHTML = `<div class="status-${type} status-message">${type === 'loading' ? '<span class="loading-spinner"></span>' : ''}${escapeHtml(msg)}</div>`;
+        const bar = document.getElementById('topbarProgress');
+        if (type === 'loading') bar.classList.remove('hidden'); else bar.classList.add('hidden');
+    }
+    function clearStatus() { document.getElementById('statusMessage').innerHTML = ''; document.getElementById('topbarProgress').classList.add('hidden'); }
+
+    function toggleSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        const content = document.getElementById('content');
+        const isDesktop = window.innerWidth >= 769;
+        if (isDesktop) {
+            const isCollapsed = sidebar.classList.toggle('collapsed');
+            if (isCollapsed) {
+                content.classList.add('collapsed');
+                content.classList.remove('expanded');
+            } else {
+                content.classList.remove('collapsed');
+                content.classList.remove('expanded');
+            }
+        } else {
+            const isHidden = sidebar.classList.toggle('hidden');
+            if (isHidden) {
+                content.classList.add('expanded');
+                content.classList.remove('collapsed');
+            } else {
+                content.classList.remove('expanded');
+            }
+        }
+    }
+
+    function handleResize() {
+        const sidebar = document.getElementById('sidebar');
+        const content = document.getElementById('content');
+        const isDesktop = window.innerWidth >= 769;
+        if (isDesktop) {
+            // Ensure mobile hidden state is cleared on desktop
+            sidebar.classList.remove('hidden');
+            content.classList.remove('expanded');
+        } else {
+            // Collapsed state not used on mobile
+            content.classList.remove('collapsed');
+        }
+    }
+    window.addEventListener('resize', handleResize);
+
+    function toggleSubmenu(id) {
+        const el = document.getElementById(id);
+        el.style.display = (el.style.display === 'block') ? 'none' : 'block';
+    }
+
+    // Build acronym icon from words (first char of each word)
+    function acronymFromName(name) {
+        return name.split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 3).join('').toUpperCase();
+    }
+
+    // Date helpers
+    function standardizeDate(value) {
+        if (!value) return value;
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return value;
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    // Sheets
+    function loadSheets() {
+        showStatus('Loading available sheets...', 'loading');
+        google.script.run
+            .withSuccessHandler(handleSheetsResponse)
+            .withFailureHandler(handleSheetsError)
+            .getSheetData();
+    }
+
+    function handleSheetsResponse(res) {
+        if (res && res.success && res.sheets) {
+            renderSheetMenu(res.sheets);
+            showStatus(`Found ${res.sheets.length} sheets`, 'success');
+        } else if (res && res.error) {
+            showStatus('Error: ' + res.error, 'error');
+            renderSheetMenu([]);
+        } else {
+            showStatus('Unexpected response format', 'error');
+            renderSheetMenu([]);
+        }
+    }
+
+    function handleSheetsError(err) {
+        showStatus('Failed to load sheets: ' + err, 'error');
+        renderSheetMenu([]);
+    }
+
+    function renderSheetMenu(sheets) {
+        const menu = document.getElementById('sheetMenu');
+        if (!sheets || sheets.length === 0) {
+            menu.innerHTML = `<div class="sheet-item">No sheets found</div>`;
+            return;
+        }
+        menu.innerHTML = sheets.map(n => {
+            const ac = acronymFromName(n);
+            const isEmpty = sheetsCache[n]?.isEmpty ? 'opacity:0.7;' : '';
+            return `<div class="sheet-item ${sheetsCache[n]?.isEmpty ? 'empty' : ''}" style="${isEmpty}" onclick="selectSheet('${escapeHtml(n)}')">
+                        <span class="menu-item-icon">${ac}</span>
+                        <span>${escapeHtml(n)}</span>
+                    </div>`;
+        }).join('');
+    }
+
+    function selectSheet(name) {
+        currentSheet = name;
+        document.getElementById('sheetTitle').textContent = name;
+        document.getElementById('sheetSubtitle').textContent = 'Loading data...';
+
+        document.querySelectorAll('.sheet-item').forEach(i => i.classList.remove('active'));
+        document.querySelectorAll('.sheet-item').forEach(i => { if (i.textContent.includes(name)) i.classList.add('active'); });
+
+        if (sheetsCache[name]) { renderSheetData(sheetsCache[name]); return; }
+
+        showStatus('Loading data from ' + name + '...', 'loading');
+        google.script.run
+            .withSuccessHandler(handleSheetDataResponse)
+            .withFailureHandler(handleSheetDataError)
+            .getSheetData(name);
+    }
+
+    function handleSheetDataResponse(res) {
+        if (!res) { showStatus('Empty response', 'error'); return; }
+        if (res.success === false) { showStatus('Error: ' + (res.error || 'Unknown'), 'error'); return; }
+        if (res.sheetName) sheetsCache[res.sheetName] = res;
+        renderSheetData(res);
+    }
+
+    function handleSheetDataError(err) {
+        showStatus('Failed to load sheet data: ' + err, 'error');
+        document.getElementById('sheetTable').innerHTML = `<div class="empty-state"><h3>Error Loading Data</h3><p>Unable to load data</p></div>`;
+    }
+
+    // Filtering & pagination
+    function renderSheetData(res) {
+        clearStatus();
+        if (!res || res.isEmpty) {
+            document.getElementById('sheetSubtitle').textContent = 'Empty sheet';
+            document.getElementById('filterContainer').style.display = 'none';
+            document.getElementById('sheetTable').innerHTML = '<div class="empty-state">This sheet is empty</div>';
+            document.getElementById('pagination').style.display = 'none';
+            return;
+        }
+        document.getElementById('sheetSubtitle').textContent = `${res.totalRows} rows, ${res.headers.length} columns`;
+        filteredData = res.data;
+        currentPage = 1;
+        filterValues = {};
+        timeFilters = {};
+        renderFilters(res.headers, res.data);
+        renderPage();
+        renderPagination();
+        updateFilteredCount();
+    }
+
+    function renderFilters(headers, data) {
+        const container = document.getElementById('filterContainer');
+        container.style.display = 'flex';
+        container.innerHTML = '';
+        headers.forEach(header => {
+            const safeId = header.replace(/[^a-zA-Z0-9]/g, '_');
+            const filterGroup = document.createElement('div');
+            filterGroup.className = 'filter-group';
+            filterGroup.innerHTML = `
+                <label class="filter-label" for="filter-${safeId}">${escapeHtml(header)}</label>
+                <input type="text" placeholder="Filter ${escapeHtml(header)}" id="filter-${safeId}" class="filter-input" data-column="${escapeHtml(header)}" oninput="handleFilterInput(this, '${escapeHtml(header)}')">
+                <div id="suggestions-${safeId}" class="suggestion-list" style="display:none;"></div>
+            `;
+            if (isDateTimeColumn(data, header)) {
+                filterGroup.innerHTML += `
+                    <div class="time-filter" style="margin-top:5px;">
+                        <input type="date" id="time-from-${safeId}" placeholder="From" onchange="handleTimeFilter('${escapeHtml(header)}')">
+                        <input type="date" id="time-to-${safeId}" placeholder="To" onchange="handleTimeFilter('${escapeHtml(header)}')">
+                    </div>`;
+            }
+            container.appendChild(filterGroup);
+        });
+    }
+
+    function isDateTimeColumn(data, header) {
+        const sheetData = sheetsCache[currentSheet];
+        if (!sheetData || !sheetData.headers) return false;
+        const colIndex = sheetData.headers.indexOf(header);
+        return colIndex !== -1 && sheetData.columnIsDate && sheetData.columnIsDate[colIndex] === true;
+    }
+
+    function handleFilterInput(input, columnName) {
+        const value = input.value.toLowerCase();
+        filterValues[columnName] = value;
+        if (suggestionTimeouts[columnName]) clearTimeout(suggestionTimeouts[columnName]);
+        suggestionTimeouts[columnName] = setTimeout(() => {
+            if (value.length > 1) loadSuggestions(columnName, value); else hideSuggestions(columnName);
+        }, 300);
+        applyFilters();
+    }
+
+    function handleTimeFilter(columnName) {
+        const safeId = columnName.replace(/[^a-zA-Z0-9]/g, '_');
+        const fromInput = document.getElementById(`time-from-${safeId}`);
+        const toInput = document.getElementById(`time-to-${safeId}`);
+        timeFilters[columnName] = {
+            from: fromInput.value ? new Date(fromInput.value) : null,
+            to: toInput.value ? new Date(toInput.value) : null
+        };
+        applyFilters();
+    }
+
+    function loadSuggestions(columnName, searchTerm) {
+        google.script.run
+            .withSuccessHandler((result) => { if (result.success) showSuggestions(columnName, result.suggestions); })
+            .withFailureHandler((error) => { console.error('Error loading suggestions: ' + error); })
+            .getColumnSuggestions(currentSheet, columnName, searchTerm);
+    }
+
+    function showSuggestions(columnName, suggestions) {
+        const safeId = columnName.replace(/[^a-zA-Z0-9]/g, '_');
+        const suggestionContainer = document.getElementById(`suggestions-${safeId}`);
+        if (suggestions.length === 0) { suggestionContainer.style.display = 'none'; return; }
+        suggestionContainer.innerHTML = suggestions.map(s => `
+            <div class="suggestion-item" onclick="selectSuggestion('${escapeHtml(columnName)}', '${escapeHtml(s.value)}')">
+                ${escapeHtml(s.value)}
+                <span class="suggestion-count">${s.count}</span>
+            </div>`).join('');
+        suggestionContainer.style.display = 'block';
+    }
+
+    function hideSuggestions(columnName) {
+        const safeId = columnName.replace(/[^a-zA-Z0-9]/g, '_');
+        const suggestionContainer = document.getElementById(`suggestions-${safeId}`);
+        suggestionContainer.style.display = 'none';
+    }
+
+    function selectSuggestion(columnName, value) {
+        const safeId = columnName.replace(/[^a-zA-Z0-9]/g, '_');
+        const input = document.getElementById(`filter-${safeId}`);
+        input.value = value;
+        filterValues[columnName] = value.toLowerCase();
+        hideSuggestions(columnName);
+        applyFilters();
+    }
+
+    function applyFilters() {
+        if (!currentSheet || !sheetsCache[currentSheet]) return;
+        const allData = sheetsCache[currentSheet].data;
+        const headers = sheetsCache[currentSheet].headers;
+        filteredData = allData.filter(row => {
+            const textMatch = headers.every(header => {
+                const filterValue = filterValues[header];
+                if (!filterValue) return true;
+                const cellValue = (row[header] || '').toLowerCase();
+                return cellValue.includes(filterValue);
+            });
+            const timeMatch = headers.every(header => {
+                const timeFilter = timeFilters[header];
+                if (!timeFilter || (!timeFilter.from && !timeFilter.to)) return true;
+                const cellValue = row[header]; if (!cellValue) return false;
+                try {
+                    const cellDate = new Date(cellValue);
+                    if (isNaN(cellDate.getTime())) return false;
+                    if (timeFilter.from && cellDate < timeFilter.from) return false;
+                    if (timeFilter.to && cellDate > timeFilter.to) return false;
+                    return true;
+                } catch (e) { return false; }
+            });
+            return textMatch && timeMatch;
+        });
+        currentPage = 1;
+        renderPage();
+        renderPagination();
+        updateFilteredCount();
+    }
+
+    function updateFilteredCount() {
+        const subtitle = document.getElementById('sheetSubtitle');
+        const base = subtitle.textContent.replace(/\s*\|.*$/, '');
+        subtitle.textContent = `${base} | Filtered: ${filteredData.length}`;
+    }
+
+    function renderPage() {
+        const start = (currentPage - 1) * rowsPerPage;
+        const end = start + rowsPerPage;
+        const pageData = filteredData.slice(start, end);
+        const headers = sheetsCache[currentSheet]?.headers || [];
+        if (!pageData.length) {
+            document.getElementById('sheetTable').innerHTML = '<div class="empty-state">No matching rows found</div>';
+            document.getElementById('pagination').style.display = 'none';
+            return;
+        }
+        let html = `
+            <div class="table-container">
+                <div class="table-scroll">
+                    <table class="data-table">
+                        <thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>
+                        <tbody>
+                            ${pageData.map(row => `
+                                <tr>
+                                    ${headers.map(header => {
+                                        let value = row[header] || '';
+                                        if (isDateTimeColumn([row], header)) {
+                                            value = standardizeDate(value);
+                                        } else if (typeof value === 'string' && value.includes(',')) {
+                                            value = value.replace(/"/g, '');
+                                        } else if (typeof value === 'string' && value.match(/^-?\d*\.?\d+$/)) {
+                                            const numValue = parseFloat(value);
+                                            if (!isNaN(numValue)) {
+                                                value = numValue.toLocaleString('en-US', { minimumFractionDigits: value.includes('.') ? value.split('.')[1].length : 0 });
+                                            }
+                                        }
+                                        if (typeof value === 'string' && value.match(/https?:\/\/[^\s]+/)) {
+                                            const url = value.match(/https?:\/\/[^\s]+/)[0];
+                                            return `<td>${escapeHtml(value).replace(url, `<a href="${url}" target="_blank">${url}</a>`)}</td>`;
+                                        }
+                                        return `<td>${escapeHtml(value)}</td>`;
+                                    }).join('')}
+                                </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>`;
+        if (filteredData.length > rowsPerPage) {
+            html += `<div style="text-align:center;padding:10px;color:#4b5563;font-weight:bold;background-color:#f9fafb;border-top:1px solid #e5e7eb;">Showing ${start + 1}-${Math.min(end, filteredData.length)} of ${filteredData.length} rows</div>`;
+        }
+        document.getElementById('sheetTable').innerHTML = html;
+    }
+
+    function renderPagination() {
+        const totalPages = Math.ceil(filteredData.length / rowsPerPage);
+        if (totalPages <= 1) { document.getElementById('pagination').style.display = 'none'; return; }
+        document.getElementById('pagination').style.display = 'flex';
+        let paginationHTML = '';
+        paginationHTML += `<button onclick="goPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>← Previous</button>`;
+        const maxVisiblePages = 5;
+        let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+        let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+        if (endPage - startPage + 1 < maxVisiblePages) startPage = Math.max(1, endPage - maxVisiblePages + 1);
+        if (startPage > 1) {
+            paginationHTML += `<button onclick="goPage(1)">1</button>`;
+            if (startPage > 2) paginationHTML += `<button disabled>...</button>`;
+        }
+        for (let i = startPage; i <= endPage; i++) paginationHTML += `<button onclick="goPage(${i})" ${i === currentPage ? 'class="active"' : ''}>${i}</button>`;
+        if (endPage < totalPages) {
+            if (endPage < totalPages - 1) paginationHTML += `<button disabled>...</button>`;
+            paginationHTML += `<button onclick="goPage(${totalPages})">${totalPages}</button>`;
+        }
+        paginationHTML += `<button onclick="goPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next →</button>`;
+        document.getElementById('pagination').innerHTML = paginationHTML;
+    }
+
+    function goPage(page) {
+        const totalPages = Math.ceil(filteredData.length / rowsPerPage);
+        if (page < 1 || page > totalPages) return;
+        currentPage = page;
+        renderPage();
+        renderPagination();
+        document.getElementById('sheetTable').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function refreshData() {
+        if (!currentSheet) { showStatus('Please select a sheet first', 'error'); return; }
+        showStatus('Refreshing data...', 'loading');
+        delete sheetsCache[currentSheet];
+        google.script.run
+            .withSuccessHandler(handleSheetDataResponse)
+            .withFailureHandler(handleSheetDataError)
+            .getSheetData(currentSheet);
+    }
+
+    function fetchData() {
+        if (!currentSheet) { showStatus('Please select a sheet first', 'error'); return; }
+        showStatus('Fetching data...', 'loading');
+
+        let completed = 0;
+        const handleDone = () => {
+            completed++;
+            if (completed === 3) {
+                showStatus('Fetch complete. Refreshing view...', 'success');
+                refreshData();
+            }
+        };
+        const handleFail = (err) => {
+            console.error(err);
+            showStatus('Fetch failed: ' + (err && err.message ? err.message : err), 'error');
+        };
+
+        try {
+            google.script.run
+                .withSuccessHandler(handleDone)
+                .withFailureHandler(handleFail)
+                .run_cmc_price_updater();
+            google.script.run
+                .withSuccessHandler(handleDone)
+                .withFailureHandler(handleFail)
+                .run_ku_coin_balances_updater();
+            google.script.run
+                .withSuccessHandler(handleDone)
+                .withFailureHandler(handleFail)
+                .run_cold_wallets_balances_updater();
+            google.script.run
+                .withSuccessHandler(handleDone)
+                .withFailureHandler(handleFail)
+                .run_otc_wallets_updater();
+        } catch (e) {
+            handleFail(e);
+        }
+    }
+
+    function downloadData(format) {
+        if (!currentSheet || !sheetsCache[currentSheet]) { showStatus('No data available to download', 'error'); return; }
+        showStatus(`Preparing ${format.toUpperCase()} download...`, 'loading');
+        const data = filteredData.length > 0 ? filteredData : sheetsCache[currentSheet].data;
+        const headers = sheetsCache[currentSheet].headers;
+        let content = '', mimeType = '', filename = `${currentSheet}_${new Date().toISOString().split('T')[0]}`;
+        switch (format) {
+            case 'csv': content = convertToCSV(data, headers); mimeType = 'text/csv'; filename += '.csv'; break;
+            case 'json': content = JSON.stringify(data, null, 2); mimeType = 'application/json'; filename += '.json'; break;
+            case 'md': content = convertToMarkdownTable(data, headers); mimeType = 'text/markdown'; filename += '.md'; break;
+        }
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); showStatus(`Downloaded ${filename} successfully`, 'success'); }, 100);
+    }
+
+    function convertToCSV(data, headers) {
+        const headerRow = headers.map(escapeHtml).join(',');
+        const rows = data.map(row => headers.map(header => {
+            let value = row[header] || '';
+            if (isDateTimeColumn([row], header)) value = standardizeDate(value);
+            if (typeof value === 'string' && (value.includes(',') || value.includes('"') || value.includes('\n'))) return `"${value.replace(/\"/g, '""')}"`;
+            return value;
+        }).join(','));
+        return [headerRow, ...rows].join('\n');
+    }
+
+    function convertToMarkdownTable(data, headers) {
+        const headerRow = '| ' + headers.map(escapeHtml).join(' | ') + ' |';
+        const separator = '| ' + headers.map(() => '---').join(' | ') + ' |';
+        const rows = data.map(row => '| ' + headers.map(header => {
+            let value = row[header] || '';
+            if (isDateTimeColumn([row], header)) value = standardizeDate(value);
+            return escapeHtml(value);
+        }).join(' | ') + ' |');
+        return [headerRow, separator, ...rows].join('\n');
+    }
+
+    function handleFileUpload(files) {
+        if (!files.length || !currentSheet) { showStatus('Please select a sheet first', 'error'); return; }
+        const file = files[0]; const reader = new FileReader();
+        reader.onload = function(e) {
+            const csvData = e.target.result; showStatus('Uploading CSV data...', 'loading');
+            google.script.run
+                .withSuccessHandler(handleUploadSuccess)
+                .withFailureHandler(handleUploadError)
+                .uploadCSVData(currentSheet, csvData);
+        };
+        reader.readAsText(file);
+    }
+
+    function handleUploadSuccess(result) { if (result.success) { showStatus(`Successfully uploaded ${result.processed} records`, 'success'); refreshData(); } else { showStatus('Upload failed: ' + result.error, 'error'); } }
+    function handleUploadError(error) { showStatus('Upload error: ' + error, 'error'); }
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.classList.contains('filter-input')) document.querySelectorAll('.suggestion-list').forEach(el => { el.style.display = 'none'; });
+    });
+
+    document.addEventListener('DOMContentLoaded', () => { loadSheets(); });
+</script>
+</body>
+</html>
