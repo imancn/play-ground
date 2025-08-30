@@ -47,7 +47,7 @@ const NATIVE_SYMBOLS_BY_NETWORK = {
 
 // Token symbol normalizer/aliases
 const TOKEN_SYMBOL_ALIASES = {
-  'WETH':'ETH', 'WBNB':'BNB', 'WBTC':'BTC'
+  'WETH':'ETH', 'WBNB':'BNB', 'WBTC':'BTC', 'BTCB':'BTC'
 };
 function normalizeSymbol(sym) {
   if (!sym) return null;
