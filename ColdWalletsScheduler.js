@@ -238,20 +238,14 @@ function run_cold_wallets_balances_updater() {
     });
 
     Logger.log(`📊 Total balances collected: ${Object.keys(balances).length} tokens`);
+    Logger.log(`🔒 Filtering to centralized symbols list: ${getTokensOrder().length} tokens`);
 
     // Write to sheet
     const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
 
-    // Pre-fill ordered tokens
-    const inOrder = getTokensOrder().map(tok => [now, tok, Number(balances[tok] || 0)]);
-
-    // Append any extra discovered tokens not present in getTokensOrder()
-    const extras = Object.keys(balances)
-      .filter(k => !getTokensOrder().includes(k))
-      .sort()
-      .map(tok => [now, tok, Number(balances[tok] || 0)]);
-
-    const rows = inOrder.concat(extras);
+    // Only include tokens that are in the centralized symbols list
+    const centralizedSymbols = getTokensOrder();
+    const rows = centralizedSymbols.map(tok => [now, tok, Number(balances[tok] || 0)]);
 
     // Set headers if sheet is empty
     if (sheet.getLastRow() === 0) {
@@ -279,7 +273,7 @@ function run_cold_wallets_balances_updater() {
     }
     
     Logger.log("✅ Balances (native + tokens) updated successfully!");
-    Logger.log(`📈 Updated ${rows.length} token balances in sheet`);
+    Logger.log(`📈 Updated ${rows.length} centralized token balances in sheet`);
     
   } catch (error) {
     Logger.log(`❌ Critical error in balance update: ${error.message}`);
