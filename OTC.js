@@ -3,7 +3,7 @@
 // =============================================================================
 // Configuration constants - Using global configuration to avoid conflicts
 const OTC_CONFIG = {
-  BALANCE_SHEET_NAME: "OTC Wallets USDT Balances",
+  BALANCE_SHEET_NAME: "OTC",
   UPDATE_INTERVAL: 6 * 60 * 60 * 1000, // 6 hours in milliseconds
   MAX_RETRIES: 3,
   RETRY_DELAY: 1000, // 1 second
@@ -295,7 +295,7 @@ function fetchWalletTypeUSDTBalances(walletType) {
 
 // ======= SHEET MANAGEMENT =======
 /**
- * Initialize the OTC Wallets USDT Balances sheet
+ * Initialize the OTC sheet
  */
 function initializeOTCBalancesSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
