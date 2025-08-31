@@ -336,7 +336,7 @@ function makeKucoinRequest(method, endpoint, params = {}, accountNumber = 1) {
  * Create or update a sheet with currency balances
  * @param {string} sheetName - Name of the sheet to create/update
  */
-function createOrUpdateBalanceSheet(sheetName = "KuCoin Balances") {
+function createOrUpdateBalanceSheet(sheetName = "KuCoin") {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(sheetName);
   

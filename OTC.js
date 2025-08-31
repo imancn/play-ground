@@ -3,7 +3,7 @@
 // =============================================================================
 // Configuration constants - Using global configuration to avoid conflicts
 const OTC_CONFIG = {
-  BALANCE_SHEET_NAME: "OTC Wallets USDT Balances",
+  BALANCE_SHEET_NAME: "OTC",
   UPDATE_INTERVAL: 6 * 60 * 60 * 1000, // 6 hours in milliseconds
   MAX_RETRIES: 3,
   RETRY_DELAY: 1000, // 1 second
@@ -295,7 +295,7 @@ function fetchWalletTypeUSDTBalances(walletType) {
 
 // ======= SHEET MANAGEMENT =======
 /**
- * Initialize the OTC Wallets USDT Balances sheet
+ * Initialize the OTC sheet
  */
 function initializeOTCBalancesSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -324,7 +324,7 @@ function initializeOTCBalancesSheet() {
 }
 
 /**
- * Update the OTC Wallets USDT Balances sheet with new data
+ * Update the OTC sheet with new data
  */
 function updateOTCBalancesSheet(balances) {
   const sheet = initializeOTCBalancesSheet();
@@ -441,7 +441,7 @@ function run_otc_wallets_updater_impl() {
  * Test function to verify the scheduler is working
  */
 function test_otc_scheduler() {
-  console.log('Testing OTC Wallets Scheduler...');
+  console.log('Testing OTC Scheduler...');
   
   try {
     // Test individual balance fetching functions
@@ -479,7 +479,7 @@ function manual_otc_update() {
 }
 
 /**
- * Get current OTC Wallets USDT balances without updating the sheet
+ * Get current OTC balances without updating the sheet
  */
 function get_current_otc_usdt_balances() {
   try {
@@ -551,7 +551,7 @@ function setup_otc_scheduler_trigger() {
       .everyHours(6)
       .create();
     
-    console.log('OTC Wallets scheduler trigger set up successfully - will run every 6 hours');
+    console.log('OTC scheduler trigger set up successfully - will run every 6 hours');
     return true;
   } catch (error) {
     console.log(`Error setting up trigger: ${error.message}`);
@@ -568,7 +568,7 @@ function remove_otc_scheduler_trigger() {
     triggers.forEach(trigger => {
       if (trigger.getHandlerFunction() === 'run_otc_wallets_updater_impl') {
         ScriptApp.deleteTrigger(trigger);
-        console.log('OTC Wallets scheduler trigger removed');
+        console.log('OTC scheduler trigger removed');
       }
     });
     
