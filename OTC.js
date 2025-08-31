@@ -9,7 +9,10 @@ const OTC_CONFIG = {
   RETRY_DELAY: 1000, // 1 second
   // Fallback API keys in case environment is not configured
   MORALIS_API_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjE3NmI0ZjU3LTA4ZmItNGJlMy04NjYyLWRiODU2Y2ViN2E1NyIsIm9yZ0lkIjoiNDY2NzI4IiwidXNlcklkIjoiNDgwMTYxIiwidHlwZUlkIjoiOGMxNGI3YTktMmZlZS00NDVlLWIyZjktZDFmMWQyZjQ3OWQwIiwidHlwZSI6IlBST0pFQ1QiLCJpYXQiOjE3NTU5MzcwMzksImV4cCI6NDkxMTY5NzAzOX0.OnDYZNw983she_yNBpMtW_CY1muJw13QWrrX6qDjPxg',
-  TRON_API_KEY: ''
+  TRON_API_KEY: '',
+  // Price API configuration
+  COINGECKO_API_URL: 'https://api.coingecko.com/api/v3',
+  PRICE_CACHE_DURATION: 5 * 60 * 1000 // 5 minutes cache
 };
 
 // Wallet configurations - Using global configuration to avoid conflicts
@@ -34,6 +37,10 @@ const CONTRACT_ADDRESSES = {
 
 // USDT_CONTRACTS constant for backward compatibility with tests
 const USDT_CONTRACTS = CONTRACT_ADDRESSES;
+
+// Global price cache to avoid repeated API calls
+let PRICE_CACHE = {};
+let PRICE_CACHE_TIMESTAMP = 0;
 
 // Network configurations - Using global configuration to avoid conflicts
 const NETWORK_CONFIGS = {
@@ -98,16 +105,19 @@ function safeFetchContent(url, options) {
       }
       options.headers = cleanHeaders;
     }
+
+    const response = UrlFetchApp.fetch(url, options);
+    const responseCode = response.getResponseCode();
     
-    const res = UrlFetchApp.fetch(url, options || {});
-    return {
-      code: (typeof res.getResponseCode === 'function') ? res.getResponseCode() : 0,
-      text: (typeof res.getContentText === 'function') ? res.getContentText() : '',
-      headers: (typeof res.getAllHeaders === 'function') ? res.getAllHeaders() : {}
-    };
-  } catch (e) {
-    console.log(`HTTP fetch failed for ${url}: ${e}`);
-    return { code: -1, text: '', headers: {} };
+    if (responseCode === 200) {
+      return JSON.parse(response.getContentText());
+    } else {
+      console.log(`HTTP ${responseCode} for ${url}`);
+      return null;
+    }
+  } catch (error) {
+    console.log(`Error fetching ${url}: ${error.message}`);
+    return null;
   }
 }
 
@@ -148,6 +158,105 @@ function retryOperation(operation, maxRetries = OTC_CONFIG.MAX_RETRIES) {
   throw new Error(`Operation failed after ${maxRetries} attempts`);
 }
 
+// ======= PRICE FETCHING FUNCTIONS =======
+/**
+ * Fetch token price from CoinGecko API
+ */
+function fetchTokenPrice(tokenSymbol, tokenAddress = null) {
+  try {
+    // Check cache first
+    const cacheKey = tokenAddress || tokenSymbol;
+    const now = Date.now();
+    
+    if (PRICE_CACHE[cacheKey] && 
+        (now - PRICE_CACHE_TIMESTAMP) < OTC_CONFIG.PRICE_CACHE_DURATION) {
+      return PRICE_CACHE[cacheKey];
+    }
+    
+    // Build API URL
+    let url;
+    if (tokenAddress) {
+      // Use contract address for more accurate pricing
+      url = `${OTC_CONFIG.COINGECKO_API_URL}/simple/token_price/binance-smart-chain?contract_addresses=${tokenAddress}&vs_currencies=usd`;
+    } else {
+      // Use symbol for general tokens
+      url = `${OTC_CONFIG.COINGECKO_API_URL}/simple/price?ids=${tokenSymbol.toLowerCase()}&vs_currencies=usd`;
+    }
+    
+    const response = UrlFetchApp.fetch(url, {
+      method: 'GET',
+      muteHttpExceptions: true
+    });
+    
+    if (response.getResponseCode() === 200) {
+      const data = JSON.parse(response.getContentText());
+      let price = 0;
+      
+      if (tokenAddress) {
+        // Extract price from contract address response
+        const tokenData = data[tokenAddress.toLowerCase()];
+        price = tokenData ? tokenData.usd : 0;
+      } else {
+        // Extract price from symbol response
+        const tokenData = data[tokenSymbol.toLowerCase()];
+        price = tokenData ? tokenData.usd : 0;
+      }
+      
+      // Cache the price
+      PRICE_CACHE[cacheKey] = price;
+      PRICE_CACHE_TIMESTAMP = now;
+      
+      console.log(`✅ Price fetched for ${tokenSymbol}: $${price}`);
+      return price;
+    } else {
+      console.log(`⚠️ Failed to fetch price for ${tokenSymbol}: HTTP ${response.getResponseCode()}`);
+      return 0;
+    }
+  } catch (error) {
+    console.log(`❌ Error fetching price for ${tokenSymbol}: ${error.message}`);
+    return 0;
+  }
+}
+
+/**
+ * Get USD value for a token balance
+ */
+function getTokenUSDValue(tokenSymbol, tokenBalance, tokenAddress = null) {
+  const price = fetchTokenPrice(tokenSymbol, tokenAddress);
+  return price * tokenBalance;
+}
+
+/**
+ * Convert token balances to USD values
+ */
+function convertBalancesToUSD(tokens, network = 'BSC') {
+  if (!tokens || tokens.length === 0) return { tokens: [], total: 0 };
+  
+  const usdTokens = tokens.map(token => {
+    let usdValue = 0;
+    
+    // Try to get price by contract address first, then by symbol
+    if (token.contractAddress) {
+      usdValue = getTokenUSDValue(token.symbol, token.balance, token.contractAddress);
+    } else {
+      usdValue = getTokenUSDValue(token.symbol, token.balance);
+    }
+    
+    return {
+      ...token,
+      usdValue: usdValue,
+      usdBalance: usdValue
+    };
+  });
+  
+  const totalUSD = usdTokens.reduce((sum, token) => sum + token.usdValue, 0);
+  
+  return {
+    tokens: usdTokens,
+    total: totalUSD
+  };
+}
+
 // ======= BALANCE FETCHING FUNCTIONS =======
 /**
  * Fetch ALL token balances for BSC wallet using Moralis API
@@ -156,40 +265,50 @@ function fetchBSCAllBalances(address) {
   try {
     if (!OTC_CONFIG.MORALIS_API_KEY) {
       console.log(`⚠️ BSC balance fetch failed for ${address}: Moralis API key not configured`);
-      return { total: 0, tokens: [] };
+      return { tokens: [], total: 0 };
     }
-    
-    // Fetch all ERC20 tokens
+
     const url = `https://deep-index.moralis.io/api/v2.2/${address}/erc20?chain=bsc`;
-    const options = {
-      method: 'get',
-      headers: {'X-API-Key': OTC_CONFIG.MORALIS_API_KEY},
+    const response = UrlFetchApp.fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'X-API-Key': OTC_CONFIG.MORALIS_API_KEY
+      },
       muteHttpExceptions: true
-    };
-    
-    const response = fetchJson(url, options, []);
-    
-    if (Array.isArray(response) && response.length > 0) {
-      const tokens = response.map(token => {
-        const balance = parseFloat(token.balance || 0) / Math.pow(10, token.decimals || 18);
-        return {
-          symbol: token.symbol || 'UNKNOWN',
-          address: token.token_address,
-          balance: balance,
-          decimals: token.decimals || 18
-        };
-      }).filter(token => token.balance > 0);
+    });
+
+    if (response.getResponseCode() === 200) {
+      const data = JSON.parse(response.getContentText());
       
-      const total = tokens.reduce((sum, token) => sum + token.balance, 0);
-      console.log(`✅ BSC balances fetched for ${address}: ${tokens.length} tokens, Total: ${total.toFixed(2)}`);
-      return { total: total, tokens: tokens };
+      if (data && data.length > 0) {
+        const tokens = data.map(token => {
+          const balance = parseFloat(token.balance || 0) / Math.pow(10, token.decimals || 18);
+          return {
+            symbol: token.symbol || 'UNKNOWN',
+            name: token.name || 'Unknown Token',
+            balance: balance,
+            contractAddress: token.token_address,
+            decimals: token.decimals || 18
+          };
+        }).filter(token => token.balance > 0);
+
+        // Convert balances to USD values
+        const usdBalances = convertBalancesToUSD(tokens, 'BSC');
+        
+        console.log(`✅ BSC balances fetched for ${address}: ${usdBalances.tokens.length} tokens, Total: $${usdBalances.total.toFixed(2)}`);
+        return usdBalances;
+      } else {
+        console.log(`ℹ️ BSC balance response empty for ${address} - Wallet may have no tokens`);
+        return { tokens: [], total: 0 };
+      }
     } else {
-      console.log(`ℹ️ BSC balance response empty for ${address} - Wallet may have no tokens`);
-      return { total: 0, tokens: [] };
+      console.log(`❌ Error fetching BSC balances for ${address}: HTTP ${response.getResponseCode()}`);
+      return { tokens: [], total: 0 };
     }
   } catch (error) {
     console.log(`❌ Error fetching BSC balances for ${address}: ${error.message}`);
-    return { total: 0, tokens: [] };
+    return { tokens: [], total: 0 };
   }
 }
 
@@ -243,40 +362,50 @@ function fetchETHAllBalances(address) {
   try {
     if (!OTC_CONFIG.MORALIS_API_KEY) {
       console.log(`⚠️ ETH balance fetch failed for ${address}: Moralis API key not configured`);
-      return { total: 0, tokens: [] };
+      return { tokens: [], total: 0 };
     }
-    
-    // Fetch all ERC20 tokens
+
     const url = `https://deep-index.moralis.io/api/v2.2/${address}/erc20?chain=eth`;
-    const options = {
-      method: 'get',
-      headers: {'X-API-Key': OTC_CONFIG.MORALIS_API_KEY},
+    const response = UrlFetchApp.fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'X-API-Key': OTC_CONFIG.MORALIS_API_KEY
+      },
       muteHttpExceptions: true
-    };
-    
-    const response = fetchJson(url, options, []);
-    
-    if (Array.isArray(response) && response.length > 0) {
-      const tokens = response.map(token => {
-        const balance = parseFloat(token.balance || 0) / Math.pow(10, token.decimals || 18);
-        return {
-          symbol: token.symbol || 'UNKNOWN',
-          address: token.token_address,
-          balance: balance,
-          decimals: token.decimals || 18
-        };
-      }).filter(token => token.balance > 0);
+    });
+
+    if (response.getResponseCode() === 200) {
+      const data = JSON.parse(response.getContentText());
       
-      const total = tokens.reduce((sum, token) => sum + token.balance, 0);
-      console.log(`✅ ETH balances fetched for ${address}: ${tokens.length} tokens, Total: ${total.toFixed(2)}`);
-      return { total: total, tokens: tokens };
+      if (data && data.length > 0) {
+        const tokens = data.map(token => {
+          const balance = parseFloat(token.balance || 0) / Math.pow(10, token.decimals || 18);
+          return {
+            symbol: token.symbol || 'UNKNOWN',
+            name: token.name || 'Unknown Token',
+            balance: balance,
+            contractAddress: token.token_address,
+            decimals: token.decimals || 18
+          };
+        }).filter(token => token.balance > 0);
+
+        // Convert balances to USD values
+        const usdBalances = convertBalancesToUSD(tokens, 'ETH');
+        
+        console.log(`✅ ETH balances fetched for ${address}: ${usdBalances.tokens.length} tokens, Total: $${usdBalances.total.toFixed(2)}`);
+        return usdBalances;
+      } else {
+        console.log(`ℹ️ ETH balance response empty for ${address} - Wallet may have no tokens`);
+        return { tokens: [], total: 0 };
+      }
     } else {
-      console.log(`ℹ️ ETH balance response empty for ${address} - Wallet may have no tokens`);
-      return { total: 0, tokens: [] };
+      console.log(`❌ Error fetching ETH balances for ${address}: HTTP ${response.getResponseCode()}`);
+      return { tokens: [], total: 0 };
     }
   } catch (error) {
     console.log(`❌ Error fetching ETH balances for ${address}: ${error.message}`);
-    return { total: 0, tokens: [] };
+    return { tokens: [], total: 0 };
   }
 }
 
@@ -328,35 +457,46 @@ function fetchETHUSDTBalance(address) {
  */
 function fetchTRXAllBalances(address) {
   try {
-    // Use Tronscan API which is more reliable than TronGrid for TRC20 tokens
     const url = `https://apilist.tronscan.org/api/account?address=${address}`;
-    const data = fetchJson(url, { muteHttpExceptions: true }, {});
-    
-    if (!data || !data.trc20token_balances) {
-      console.log(`ℹ️ TRX balance response empty for ${address} - Wallet may have no TRC20 tokens`);
-      return { total: 0, tokens: [] };
-    }
-    
-    // Process all TRC20 tokens
-    const tokens = data.trc20token_balances.map(token => {
-      const balance = typeof token.balance === 'string' ? Number(token.balance) : Number(token.balance || token.tokenBalance || 0);
-      const decimals = Number(token.tokenDecimal || token.decimals || 6);
-      const finalBalance = balance / Math.pow(10, decimals);
+    const response = UrlFetchApp.fetch(url, {
+      method: 'GET',
+      muteHttpExceptions: true
+    });
+
+    if (response.getResponseCode() === 200) {
+      const data = JSON.parse(response.getContentText());
       
-      return {
-        symbol: token.tokenAbbr || token.symbol || 'UNKNOWN',
-        address: token.contract_address,
-        balance: finalBalance,
-        decimals: decimals
-      };
-    }).filter(token => token.balance > 0);
-    
-    const total = tokens.reduce((sum, token) => sum + token.balance, 0);
-    console.log(`✅ TRX balances fetched for ${address}: ${tokens.length} tokens, Total: ${total.toFixed(2)}`);
-    return { total: total, tokens: tokens };
+      if (!data || !data.trc20token_balances) {
+        console.log(`ℹ️ TRX balance response empty for ${address} - Wallet may have no TRC20 tokens`);
+        return { tokens: [], total: 0 };
+      }
+
+      const tokens = data.trc20token_balances.map(token => {
+        const balance = typeof token.balance === 'string' ? Number(token.balance) : Number(token.balance || token.tokenBalance || 0);
+        const decimals = token.tokenDecimal || 6;
+        const finalBalance = balance / Math.pow(10, decimals);
+        
+        return {
+          symbol: token.tokenAbbr || 'UNKNOWN',
+          name: token.tokenName || 'Unknown Token',
+          balance: finalBalance,
+          contractAddress: token.tokenId,
+          decimals: decimals
+        };
+      }).filter(token => token.balance > 0);
+
+      // Convert balances to USD values
+      const usdBalances = convertBalancesToUSD(tokens, 'TRX');
+      
+      console.log(`✅ TRX balances fetched for ${address}: ${usdBalances.tokens.length} tokens, Total: $${usdBalances.total.toFixed(2)}`);
+      return usdBalances;
+    } else {
+      console.log(`❌ Error fetching TRX balances for ${address}: HTTP ${response.getResponseCode()}`);
+      return { tokens: [], total: 0 };
+    }
   } catch (error) {
     console.log(`❌ Error fetching TRX balances for ${address}: ${error.message}`);
-    return { total: 0, tokens: [] };
+    return { tokens: [], total: 0 };
   }
 }
 
@@ -396,6 +536,79 @@ function fetchTRXUSDTBalance(address) {
 }
 
 /**
+ * Fetch native token balance (BNB, ETH, TRX) for a wallet
+ */
+function fetchNativeBalance(address, network) {
+  try {
+    let url, response;
+    
+    switch (network) {
+      case 'BSC':
+        if (!OTC_CONFIG.MORALIS_API_KEY) return 0;
+        url = `https://deep-index.moralis.io/api/v2.2/${address}/balance?chain=bsc`;
+        response = UrlFetchApp.fetch(url, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'X-API-Key': OTC_CONFIG.MORALIS_API_KEY
+          },
+          muteHttpExceptions: true
+        });
+        break;
+        
+      case 'ETH':
+        if (!OTC_CONFIG.MORALIS_API_KEY) return 0;
+        url = `https://deep-index.moralis.io/api/v2.2/${address}/balance?chain=eth`;
+        response = UrlFetchApp.fetch(url, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'X-API-Key': OTC_CONFIG.MORALIS_API_KEY
+          },
+          muteHttpExceptions: true
+        });
+        break;
+        
+      case 'TRX':
+        url = `https://apilist.tronscan.org/api/account?address=${address}`;
+        response = UrlFetchApp.fetch(url, {
+          method: 'GET',
+          muteHttpExceptions: true
+        });
+        break;
+        
+      default:
+        return 0;
+    }
+    
+    if (response.getResponseCode() === 200) {
+      const data = JSON.parse(response.getContentText());
+      
+      switch (network) {
+        case 'BSC':
+        case 'ETH':
+          const balance = parseFloat(data.balance || 0) / Math.pow(10, 18);
+          const price = fetchTokenPrice(network === 'BSC' ? 'binancecoin' : 'ethereum');
+          return balance * price;
+          
+        case 'TRX':
+          const trxBalance = parseFloat(data.balance || 0) / Math.pow(10, 6);
+          const trxPrice = fetchTokenPrice('tron');
+          return trxBalance * trxPrice;
+          
+        default:
+          return 0;
+      }
+    }
+    
+    return 0;
+  } catch (error) {
+    console.log(`❌ Error fetching ${network} native balance for ${address}: ${error.message}`);
+    return 0;
+  }
+}
+
+/**
  * Fetch ALL asset balances for a specific wallet type (not just USDT)
  */
 function fetchWalletTypeAllBalances(walletType) {
@@ -410,19 +623,34 @@ function fetchWalletTypeAllBalances(walletType) {
   // Fetch BSC all balances
   if (wallets.BSC) {
     balances.BSC = retryOperation(() => fetchBSCAllBalances(wallets.BSC));
-    console.log(`${walletType} BSC total balance: ${balances.BSC.total.toFixed(2)} (${balances.BSC.tokens.length} tokens)`);
+    
+    // Add native BNB balance
+    const nativeBNB = fetchNativeBalance(wallets.BSC, 'BSC');
+    balances.BSC.total += nativeBNB;
+    
+    console.log(`${walletType} BSC total balance: $${balances.BSC.total.toFixed(2)} (${balances.BSC.tokens.length} tokens + native BNB)`);
   }
   
   // Fetch ETH all balances
   if (wallets.ETH) {
     balances.ETH = retryOperation(() => fetchETHAllBalances(wallets.ETH));
-    console.log(`${walletType} ETH total balance: ${balances.ETH.total.toFixed(2)} (${balances.ETH.tokens.length} tokens)`);
+    
+    // Add native ETH balance
+    const nativeETH = fetchNativeBalance(wallets.ETH, 'ETH');
+    balances.ETH.total += nativeETH;
+    
+    console.log(`${walletType} ETH total balance: $${balances.ETH.total.toFixed(2)} (${balances.ETH.tokens.length} tokens + native ETH)`);
   }
   
   // Fetch TRX all balances
   if (wallets.TRX) {
     balances.TRX = retryOperation(() => fetchTRXAllBalances(wallets.TRX));
-    console.log(`${walletType} TRX total balance: ${balances.TRX.total.toFixed(2)} (${balances.TRX.tokens.length} tokens)`);
+    
+    // Add native TRX balance
+    const nativeTRX = fetchNativeBalance(wallets.TRX, 'TRX');
+    balances.TRX.total += nativeTRX;
+    
+    console.log(`${walletType} TRX total balance: $${balances.TRX.total.toFixed(2)} (${balances.TRX.tokens.length} tokens + native TRX)`);
   }
   
   return balances;
@@ -582,17 +810,18 @@ function run_otc_wallets_updater_impl() {
     // Log summary
     const totalDirty = Object.values(dirtyBalances).reduce((sum, balanceData) => sum + (balanceData.total || 0), 0);
     const totalClean = Object.values(cleanBalances).reduce((sum, balanceData) => sum + (balanceData.total || 0), 0);
+    const combinedTotal = totalDirty + totalClean;
     
     console.log('OTC Wallets balance update completed successfully!');
-    console.log(`Total DIRTY wallets ALL assets: ${totalDirty.toFixed(2)}`);
-    console.log(`Total CLEAN wallets ALL assets: ${totalClean.toFixed(2)}`);
-    console.log(`Total combined ALL assets: ${(totalDirty + totalClean).toFixed(2)}`);
+    console.log(`Total DIRTY wallets ALL assets: $${totalDirty.toFixed(2)}`);
+    console.log(`Total CLEAN wallets ALL assets: $${totalClean.toFixed(2)}`);
+    console.log(`Total combined ALL assets: $${combinedTotal.toFixed(2)}`);
     
     return {
       success: true,
       dirtyTotal: totalDirty,
       cleanTotal: totalClean,
-      combinedTotal: totalDirty + totalClean,
+      combinedTotal: combinedTotal,
       timestamp: new Date().toISOString()
     };
   } catch (error) {
@@ -685,6 +914,39 @@ function get_current_all_asset_balances() {
   }
 }
 
+/**
+ * Display help for OTC functions
+ */
+function otc_help() {
+  console.log(`
+🚀 OTC Wallets Scheduler - Essential Functions
+==============================================
+
+📋 MAIN FUNCTIONS:
+------------------
+• run_otc_wallets_updater() - Update all wallet balances
+• get_current_all_asset_balances() - Get current balances without updating sheet
+
+📊 BALANCE FETCHING:
+--------------------
+• fetchBSCAllBalances(address) - Fetch all BSC token balances with USD conversion
+• fetchETHAllBalances(address) - Fetch all ETH token balances with USD conversion
+• fetchTRXAllBalances(address) - Fetch all TRX token balances with USD conversion
+
+💰 PRICE & CONVERSION:
+----------------------
+• fetchTokenPrice(symbol, address) - Fetch token price from CoinGecko
+• convertBalancesToUSD(tokens, network) - Convert all token balances to USD
+
+📋 SHEET MANAGEMENT:
+--------------------
+• initializeOTCBalancesSheet() - Initialize the balances spreadsheet
+• updateOTCBalancesSheet(balances) - Update sheet with new balance data
+
+✅ The system now properly converts all token balances to USD values using real-time prices.
+`);
+}
+
 // ======= TRIGGER SETUP =======
 /**
  * Set up time-based trigger for automatic execution
@@ -763,356 +1025,6 @@ function check_api_key_status() {
   } catch (error) {
     console.log(`Error checking API key status: ${error.message}`);
     return null;
-  }
-}
-
-/**
- * Comprehensive diagnostic function to identify balance loading issues
- */
-function diagnose_balance_issues() {
-  try {
-    console.log('🔍 Starting comprehensive balance issue diagnosis...\n');
-    
-    // Initialize configuration
-    console.log('Initializing OTC_CONFIG...');
-    initializeOTCConfig();
-    
-    const diagnosis = {
-      timestamp: new Date().toISOString(),
-      apiKeys: {},
-      networkTests: {},
-      walletTests: {},
-      recommendations: []
-    };
-    
-    // Check API key configuration
-    console.log('1. Checking API Key Configuration...');
-    diagnosis.apiKeys.moralis = !!OTC_CONFIG.MORALIS_API_KEY;
-    diagnosis.apiKeys.tron = !!OTC_CONFIG.TRON_API_KEY;
-    
-    console.log(` - Moralis API Key: ${diagnosis.apiKeys.moralis ? '✅ Configured' : '❌ NOT CONFIGURED'}`);
-    console.log(` - Tron API Key: ${diagnosis.apiKeys.tron ? '✅ Configured' : '❌ NOT CONFIGURED'}`);
-    
-    if (!diagnosis.apiKeys.moralis) {
-      diagnosis.recommendations.push('Moralis API key is required for BSC and ETH balance fetching');
-    }
-    
-    if (!diagnosis.apiKeys.tron) {
-      diagnosis.recommendations.push('Tron API key is recommended for better TRX balance fetching');
-    }
-    
-    // Test network connectivity
-    console.log('\n2. Testing Network Connectivity...');
-    
-    // Test BSC connectivity
-    try {
-      const bscTestUrl = 'https://deep-index.moralis.io/api/v2.2/0x0000000000000000000000000000000000000000/erc20?chain=bsc&token_addresses=0x55d398326f99059fF775485246999027B3197955';
-      const bscResponse = UrlFetchApp.fetch(bscTestUrl, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'X-API-Key': OTC_CONFIG.MORALIS_API_KEY || 'test'
-        },
-        muteHttpExceptions: true
-      });
-      
-      diagnosis.networkTests.bsc = {
-        status: bscResponse.getResponseCode(),
-        accessible: bscResponse.getResponseCode() === 200 || bscResponse.getResponseCode() === 401
-      };
-      
-      console.log(` - BSC Network: ${diagnosis.networkTests.bsc.accessible ? '✅ Accessible' : '❌ Not Accessible'} (Status: ${bscResponse.getResponseCode()})`);
-    } catch (error) {
-      diagnosis.networkTests.bsc = { status: 'ERROR', accessible: false, error: error.message };
-      console.log(` - BSC Network: ❌ Error - ${error.message}`);
-    }
-    
-    // Test ETH connectivity
-    try {
-      const ethTestUrl = 'https://deep-index.moralis.io/api/v2.2/0x0000000000000000000000000000000000000000/erc20?chain=eth&token_addresses=0xdAC17F958D2ee523a2206206994597C13D831ec7';
-      const ethResponse = UrlFetchApp.fetch(ethTestUrl, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'X-API-Key': OTC_CONFIG.MORALIS_API_KEY || 'test'
-        },
-        muteHttpExceptions: true
-      });
-      
-      diagnosis.networkTests.eth = {
-        status: ethResponse.getResponseCode(),
-        accessible: ethResponse.getResponseCode() === 200 || ethResponse.getResponseCode() === 401
-      };
-      
-      console.log(` - ETH Network: ${diagnosis.networkTests.eth.accessible ? '✅ Accessible' : '❌ Not Accessible'} (Status: ${ethResponse.getResponseCode()})`);
-    } catch (error) {
-      diagnosis.networkTests.eth = { status: 'ERROR', accessible: false, error: error.message };
-      console.log(` - ETH Network: ❌ Error - ${error.message}`);
-    }
-    
-    // Test TRX connectivity
-    try {
-      const trxTestUrl = 'https://apilist.tronscan.org/api/account?address=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
-      const trxResponse = UrlFetchApp.fetch(trxTestUrl, {
-        method: 'GET',
-        muteHttpExceptions: true
-      });
-      
-      diagnosis.networkTests.trx = {
-        status: trxResponse.getResponseCode(),
-        accessible: trxResponse.getResponseCode() === 200
-      };
-      
-      console.log(` - TRX Network: ${diagnosis.networkTests.trx.accessible ? '✅ Accessible' : '❌ Not Accessible'} (Status: ${trxResponse.getResponseCode()})`);
-    } catch (error) {
-      diagnosis.networkTests.trx = { status: 'ERROR', accessible: false, error: error.message };
-      console.log(` - TRX Network: ❌ Error - ${error.message}`);
-    }
-    
-    // Test individual wallet balance fetching
-    console.log('\n3. Testing Individual Wallet Balance Fetching...');
-    
-    // Test DIRTY BSC wallet
-    try {
-      const dirtyBscBalance = fetchBSCUSDTBalance(WALLET_CONFIG.DIRTY_WALLETS.BSC);
-      diagnosis.walletTests.dirtyBsc = {
-        address: WALLET_CONFIG.DIRTY_WALLETS.BSC,
-        balance: dirtyBscBalance,
-        success: dirtyBscBalance !== undefined
-      };
-      
-      console.log(` - DIRTY BSC (${WALLET_CONFIG.DIRTY_WALLETS.BSC}): ${dirtyBscBalance !== undefined ? '✅ Success' : '❌ Failed'} - Balance: ${dirtyBscBalance}`);
-    } catch (error) {
-      diagnosis.walletTests.dirtyBsc = {
-        address: WALLET_CONFIG.DIRTY_WALLETS.BSC,
-        error: error.message,
-        success: false
-      };
-      
-      console.log(` - DIRTY BSC (${WALLET_CONFIG.DIRTY_WALLETS.BSC}): ❌ Error - ${error.message}`);
-    }
-    
-    // Test DIRTY ETH wallet
-    try {
-      const dirtyEthBalance = fetchETHUSDTBalance(WALLET_CONFIG.DIRTY_WALLETS.ETH);
-      diagnosis.walletTests.dirtyEth = {
-        address: WALLET_CONFIG.DIRTY_WALLETS.ETH,
-        balance: dirtyEthBalance,
-        success: dirtyEthBalance !== undefined
-      };
-      
-      console.log(` - DIRTY ETH (${WALLET_CONFIG.DIRTY_WALLETS.ETH}): ${dirtyEthBalance !== undefined ? '✅ Success' : '❌ Failed'} - Balance: ${dirtyEthBalance}`);
-    } catch (error) {
-      diagnosis.walletTests.dirtyEth = {
-        address: WALLET_CONFIG.DIRTY_WALLETS.ETH,
-        error: error.message,
-        success: false
-      };
-      
-      console.log(` - DIRTY ETH (${WALLET_CONFIG.DIRTY_WALLETS.ETH}): ❌ Error - ${error.message}`);
-    }
-    
-    // Test DIRTY TRX wallet
-    try {
-      const dirtyTrxBalance = fetchTRXUSDTBalance(WALLET_CONFIG.DIRTY_WALLETS.TRX);
-      diagnosis.walletTests.dirtyTrx = {
-        address: WALLET_CONFIG.DIRTY_WALLETS.TRX,
-        balance: dirtyTrxBalance,
-        success: dirtyTrxBalance !== undefined
-      };
-      
-      console.log(` - DIRTY TRX (${WALLET_CONFIG.DIRTY_WALLETS.TRX}): ${dirtyTrxBalance !== undefined ? '✅ Success' : '❌ Failed'} - Balance: ${dirtyTrxBalance}`);
-    } catch (error) {
-      diagnosis.walletTests.dirtyTrx = {
-        address: WALLET_CONFIG.DIRTY_WALLETS.TRX,
-        error: error.message,
-        success: false
-      };
-      
-      console.log(` - DIRTY TRX (${WALLET_CONFIG.DIRTY_WALLETS.TRX}): ❌ Error - ${error.message}`);
-    }
-    
-    // Test CLEAN BSC wallet
-    try {
-      const cleanBscBalance = fetchBSCUSDTBalance(WALLET_CONFIG.CLEAN_WALLETS.BSC);
-      diagnosis.walletTests.cleanBsc = {
-        address: WALLET_CONFIG.CLEAN_WALLETS.BSC,
-        balance: cleanBscBalance,
-        success: cleanBscBalance !== undefined
-      };
-      
-      console.log(` - CLEAN BSC (${WALLET_CONFIG.CLEAN_WALLETS.BSC}): ${cleanBscBalance !== undefined ? '✅ Success' : '❌ Failed'} - Balance: ${cleanBscBalance}`);
-    } catch (error) {
-      diagnosis.walletTests.cleanBsc = {
-        address: WALLET_CONFIG.CLEAN_WALLETS.BSC,
-        error: error.message,
-        success: false
-      };
-      
-      console.log(` - CLEAN BSC (${WALLET_CONFIG.CLEAN_WALLETS.BSC}): ❌ Error - ${error.message}`);
-    }
-    
-    // Test CLEAN TRX wallet
-    try {
-      const cleanTrxBalance = fetchTRXUSDTBalance(WALLET_CONFIG.CLEAN_WALLETS.TRX);
-      diagnosis.walletTests.cleanTrx = {
-        address: WALLET_CONFIG.CLEAN_WALLETS.TRX,
-        balance: cleanTrxBalance,
-        success: cleanTrxBalance !== undefined
-      };
-      
-      console.log(` - CLEAN TRX (${WALLET_CONFIG.CLEAN_WALLETS.TRX}): ${cleanTrxBalance !== undefined ? '✅ Success' : '❌ Failed'} - Balance: ${cleanTrxBalance}`);
-    } catch (error) {
-      diagnosis.walletTests.cleanTrx = {
-        address: WALLET_CONFIG.CLEAN_WALLETS.TRX,
-        error: error.message,
-        success: false
-      };
-      
-      console.log(` - CLEAN TRX (${WALLET_CONFIG.CLEAN_WALLETS.TRX}): ❌ Error - ${error.message}`);
-    }
-    
-    // Generate recommendations based on findings
-    console.log('\n4. Analysis and Recommendations...');
-    
-    if (!diagnosis.apiKeys.moralis) {
-      diagnosis.recommendations.push('🔑 Moralis API key is required for BSC and ETH balance fetching');
-    }
-    
-    if (!diagnosis.apiKeys.tron) {
-      diagnosis.recommendations.push('🔑 Tron API key is recommended for TRX balance fetching');
-    }
-    
-    if (!diagnosis.networkTests.bsc.accessible) {
-      diagnosis.recommendations.push('🌐 BSC network is not accessible - Check internet connection and Moralis API status');
-    }
-    
-    if (!diagnosis.networkTests.eth.accessible) {
-      diagnosis.recommendations.push('🌐 ETH network is not accessible - Check internet connection and Moralis API status');
-    }
-    
-    if (!diagnosis.networkTests.trx.accessible) {
-      diagnosis.recommendations.push('🌐 TRX network is not accessible - Check internet connection and Tronscan API status');
-    }
-    
-    // Check for successful vs failed balance fetches
-    const successfulFetches = Object.values(diagnosis.walletTests).filter(test => test.success).length;
-    const totalFetches = Object.keys(diagnosis.walletTests).length;
-    
-    console.log(`\n📊 Summary: ${successfulFetches}/${totalFetches} balance fetches successful`);
-    
-    if (successfulFetches === 0) {
-      diagnosis.recommendations.push('🚨 All balance fetches failed - Check API keys and network connectivity');
-    } else if (successfulFetches < totalFetches) {
-      diagnosis.recommendations.push('⚠️ Some balance fetches failed - Check individual network issues above');
-    }
-    
-    // Display recommendations
-    if (diagnosis.recommendations.length > 0) {
-      console.log('\n💡 Recommendations:');
-      diagnosis.recommendations.forEach((rec, index) => {
-        console.log(` ${index + 1}. ${rec}`);
-      });
-    } else {
-      console.log('\n✅ No issues detected - All systems appear to be working correctly');
-    }
-    
-    console.log('\n🔍 Diagnosis completed!');
-    return diagnosis;
-  } catch (error) {
-    console.error('❌ Diagnosis failed with error:', error);
-    return { error: error.message, timestamp: new Date().toISOString() };
-  }
-}
-
-/**
- * Test the OTC Wallets scheduler
- */
-function test_otc_wallets_scheduler() {
-  try {
-    console.log('🧪 Testing OTC Wallets Scheduler...');
-    
-    // Initialize configuration
-    initializeOTCConfig();
-    
-    // Test individual balance fetching functions
-    console.log('\n📊 Testing BSC USDT balance fetching...');
-    const bscBalance = fetchBSCUSDTBalance(WALLET_CONFIG.DIRTY_WALLETS.BSC);
-    console.log(`BSC Dirty wallet USDT balance: ${bscBalance}`);
-    
-    console.log('\n📊 Testing ETH USDT balance fetching...');
-    const ethBalance = fetchETHUSDTBalance(WALLET_CONFIG.DIRTY_WALLETS.ETH);
-    console.log(`ETH Dirty wallet USDT balance: ${ethBalance}`);
-    
-    console.log('\n📊 Testing TRX USDT balance fetching...');
-    const trxBalance = fetchTRXUSDTBalance(WALLET_CONFIG.DIRTY_WALLETS.TRX);
-    console.log(`TRX Dirty wallet USDT balance: ${trxBalance}`);
-    
-    // Test sheet initialization
-    console.log('\n📋 Testing sheet initialization...');
-    const sheet = initializeOTCBalancesSheet();
-    console.log(`Sheet initialized: ${sheet.getName()}`);
-    
-    // Test wallet type balance fetching
-    console.log('\n💰 Testing wallet type balance fetching...');
-    const dirtyBalances = fetchWalletTypeBalances('DIRTY_WALLETS');
-    const cleanBalances = fetchWalletTypeBalances('CLEAN_WALLETS');
-    
-    console.log('DIRTY WALLETS balances:', dirtyBalances);
-    console.log('CLEAN WALLETS balances:', cleanBalances);
-    
-    console.log('\n✅ OTC Wallets Scheduler test completed successfully!');
-    return true;
-  } catch (error) {
-    console.log(`❌ OTC Wallets Scheduler test failed: ${error.message}`);
-    return false;
-  }
-}
-
-/**
- * Test the ALL assets scheduler (fetches and sums all tokens, not just USDT)
- */
-function test_all_assets_scheduler() {
-  try {
-    console.log('🧪 Testing ALL Assets Scheduler...');
-    
-    // Initialize configuration
-    initializeOTCConfig();
-    
-    // Test individual all-balance fetching functions
-    console.log('\n📊 Testing BSC ALL balances fetching...');
-    const bscAllBalances = fetchBSCAllBalances(WALLET_CONFIG.DIRTY_WALLETS.BSC);
-    console.log(`BSC Dirty wallet ALL balances: ${bscAllBalances.total.toFixed(2)} (${bscAllBalances.tokens.length} tokens)`);
-    
-    console.log('\n📊 Testing ETH ALL balances fetching...');
-    const ethAllBalances = fetchETHAllBalances(WALLET_CONFIG.DIRTY_WALLETS.ETH);
-    console.log(`ETH Dirty wallet ALL balances: ${ethAllBalances.total.toFixed(2)} (${ethAllBalances.tokens.length} tokens)`);
-    
-    console.log('\n📊 Testing TRX ALL balances fetching...');
-    const trxAllBalances = fetchTRXAllBalances(WALLET_CONFIG.DIRTY_WALLETS.TRX);
-    console.log(`TRX Dirty wallet ALL balances: ${trxAllBalances.total.toFixed(2)} (${trxAllBalances.tokens.length} tokens)`);
-    
-    // Test wallet type all-balance fetching
-    console.log('\n💰 Testing wallet type ALL balance fetching...');
-    const dirtyAllBalances = fetchWalletTypeAllBalances('DIRTY_WALLETS');
-    const cleanAllBalances = fetchWalletTypeAllBalances('CLEAN_WALLETS');
-    
-    console.log('DIRTY WALLETS ALL balances:', dirtyAllBalances);
-    console.log('CLEAN WALLETS ALL balances:', cleanAllBalances);
-    
-    // Calculate totals
-    const totalDirty = Object.values(dirtyAllBalances).reduce((sum, balanceData) => sum + (balanceData.total || 0), 0);
-    const totalClean = Object.values(cleanAllBalances).reduce((sum, balanceData) => sum + (balanceData.total || 0), 0);
-    
-    console.log(`\n📊 Total DIRTY wallets ALL assets: ${totalDirty.toFixed(2)}`);
-    console.log(`📊 Total CLEAN wallets ALL assets: ${totalClean.toFixed(2)}`);
-    console.log(`📊 Total combined ALL assets: ${(totalDirty + totalClean).toFixed(2)}`);
-    
-    console.log('\n✅ ALL Assets Scheduler test completed successfully!');
-    return true;
-  } catch (error) {
-    console.log(`❌ ALL Assets Scheduler test failed: ${error.message}`);
-    return false;
   }
 }
 
