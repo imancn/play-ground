@@ -98,308 +98,242 @@ function formatCellValue(value, displayValue, isDateColumn, header) {
   }
 
   // Handle dates only if explicitly identified as a date column and not overridden
-  if (isDateColumn && !isNumericOverride && 
-      (value instanceof Date || 
-       (typeof value === 'string' && 
-        /^\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?$/.test(value) && 
-        !isLikelyNumeric(value) && 
-        !isNaN(Date.parse(value))))) {
-    return Utilities.formatDate(new Date(value), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm");
+  if (isDateColumn && value instanceof Date) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
   }
 
-  // Handle numbers
-  if (typeof value === 'number' && !isNaN(value)) {
-    return displayValue || value.toString();
-  }
-
-  // Handle string numbers or other cases
-  if (typeof value === 'string') {
-    const numValue = parseFloat(value.replace(/,/g, ''));
-    if (!isNaN(numValue) && value.trim() !== '') {
-      if (value.includes('.')) {
-        return displayValue || value.replace(/"/g, ''); // Preserve decimal strings as-is
-      }
-      return displayValue || numValue.toString();
+  // Handle strings that might be dates but aren't explicitly identified as date columns
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?$/.test(value)) {
+    const parsedDate = new Date(value);
+    if (!isNaN(parsedDate.getTime())) {
+      return Utilities.formatDate(parsedDate, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
     }
   }
 
-  // Return as string for other cases
-  return displayValue || String(value);
+  // Return display value if available, otherwise the original value
+  return displayValue || value;
 }
 
-// Get keyword suggestions for a specific column
-function getColumnSuggestions(sheetName, columnName, searchTerm = '') {
+// Function to handle CSV uploads
+function uploadCSV(csvContent, sheetName) {
+  try {
+    if (!csvContent || typeof csvContent !== 'string') {
+      throw new Error('CSV content must be a non-empty string');
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(sheetName);
+    
+    if (!sheet) {
+      sheet = ss.insertSheet(sheetName);
+    }
+
+    // Parse CSV content
+    const csvRows = csvContent.split('\n').map(row => row.split(',').map(cell => cell.trim().replace(/^"|"$/g, '')));
+    
+    if (csvRows.length === 0) {
+      throw new Error('CSV content is empty');
+    }
+
+    // Get headers from first row
+    const headers = csvRows[0].map(String);
+    
+    // Get existing data if any
+    const existingValues = sheet.getDataRange().getValues();
+    const existingHeaders = existingValues.length > 0 ? existingValues[0].map(String) : [];
+    
+    // If headers don't match, clear the sheet and start fresh
+    if (existingHeaders.length > 0 && !arraysEqual(headers, existingHeaders)) {
+      sheet.clear();
+      existingValues.length = 0;
+    }
+
+    // Prepare data for writing
+    const dataToWrite = csvRows;
+    
+    // Write data to sheet
+    if (dataToWrite.length > 0) {
+      const range = sheet.getRange(1, 1, dataToWrite.length, headers.length);
+      range.setValues(dataToWrite);
+      
+      // Auto-resize columns
+      for (let i = 1; i <= headers.length; i++) {
+        sheet.autoResizeColumn(i);
+      }
+    }
+
+    return {
+      success: true,
+      message: `CSV uploaded successfully to ${sheetName}`,
+      rowsProcessed: dataToWrite.length,
+      columnsProcessed: headers.length
+    };
+
+  } catch (error) {
+    Logger.log(`Error uploading CSV: ${error.message}`);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// Function to handle CSV downloads
+function downloadCSV(sheetName) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(sheetName);
-    if (!sheet) return { success: false, error: 'Sheet not found' };
     
-    const values = sheet.getDataRange().getValues();
-    const displayValues = sheet.getDataRange().getDisplayValues();
-    if (values.length === 0) return { success: true, suggestions: [] };
-    
-    const headers = values[0].map(String);
-    const columnIndex = headers.indexOf(columnName);
-    if (columnIndex === -1) return { success: false, error: 'Column not found' };
+    if (!sheet) {
+      throw new Error(`Sheet '${sheetName}' not found`);
+    }
 
-    // Determine if this column contains dates
-    const isDateColumn = values.slice(1, Math.min(values.length, 11))
-        .every(row => row[columnIndex] instanceof Date || 
-                     (typeof row[columnIndex] === 'string' && 
-                      /^\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?$/.test(row[columnIndex]) && 
-                      !isLikelyNumeric(row[columnIndex]) && 
-                      !isNaN(Date.parse(row[columnIndex]))));
+    const data = sheet.getDataRange().getValues();
+    
+    if (data.length === 0) {
+      throw new Error('Sheet is empty');
+    }
 
-    // Extract column values and filter by search term
-    const columnValues = values.slice(1)
-      .map((row, i) => formatCellValue(row[columnIndex], displayValues[i + 1][columnIndex], isDateColumn, columnName))
-      .filter(value => value && value.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    // Count frequency of each value
-    const valueCounts = {};
-    columnValues.forEach(value => {
-      valueCounts[value] = (valueCounts[value] || 0) + 1;
-    });
-    
-    // Convert to array and sort by frequency (descending)
-    const suggestions = Object.entries(valueCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 20) // Limit to top 20
-      .map(([value, count]) => ({ value, count }));
-    
-    return { success: true, suggestions };
-  } catch (err) {
-    return { success: false, error: err.message };
+    // Convert to CSV format
+    const csvContent = data.map(row => 
+      row.map(cell => {
+        const cellStr = String(cell);
+        // Escape quotes and wrap in quotes if contains comma, quote, or newline
+        if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+          return '"' + cellStr.replace(/"/g, '""') + '"';
+        }
+        return cellStr;
+      }).join(',')
+    ).join('\n');
+
+    return {
+      success: true,
+      csvContent: csvContent,
+      filename: `${sheetName}.csv`,
+      rows: data.length,
+      columns: data[0].length
+    };
+
+  } catch (error) {
+    Logger.log(`Error downloading CSV: ${error.message}`);
+    return {
+      success: false,
+      error: error.message
+    };
   }
 }
 
-function testview(){
-  uploadCSVData("test","currency_type,sum\nADA,685.2")
-}
-
-function uploadCSVData(sheetName, csvData) {
+// Function to merge new data with existing data based on key columns
+function mergeData(newData, sheetName, keyColumns) {
   try {
+    if (!Array.isArray(newData) || newData.length === 0) {
+      throw new Error('New data must be a non-empty array');
+    }
+
+    if (!Array.isArray(keyColumns) || keyColumns.length === 0) {
+      throw new Error('Key columns must be a non-empty array');
+    }
+
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    
-    // Check if sheet exists, create if not
     let sheet = ss.getSheetByName(sheetName);
+    
     if (!sheet) {
       sheet = ss.insertSheet(sheetName);
-      return { success: true, processed: 0, updated: 0, added: 0, message: `Created new sheet: ${sheetName}` };
     }
-    
-    // Parse CSV data
-    const csvRows = Utilities.parseCsv(csvData);
-    if (csvRows.length < 2) return { success: false, error: 'CSV contains no data rows' };
-    
-    const headers = csvRows[0].map(String);
-    const dataRows = csvRows.slice(1);
-    
+
     // Get existing data
     const existingValues = sheet.getDataRange().getValues();
-    const existingDisplayValues = sheet.getDataRange().getDisplayValues();
     const existingHeaders = existingValues.length > 0 ? existingValues[0].map(String) : [];
     
-    // NEW: Ensure all headers from the CSV exist in the target sheet – add any missing columns
-    const missingHeaders = headers.filter(h => !existingHeaders.includes(h));
-    if (missingHeaders.length > 0 && existingValues.length > 0) {
-      // Insert new columns at the end of the existing header row
-      const startCol = existingHeaders.length + 1; // 1-based index for Apps Script
-      sheet.insertColumnsAfter(existingHeaders.length, missingHeaders.length);
-      sheet.getRange(1, startCol, 1, missingHeaders.length).setValues([missingHeaders]);
-      // Update local header list so subsequent logic sees the new columns
-      existingHeaders.push(...missingHeaders);
-    }
-    
-    // If sheet is empty, add headers first
+    // If no existing data, just write the new data
     if (existingValues.length === 0) {
-      sheet.appendRow(headers);
-      // Set the second column (sum) to plain text format to persist values as strings
-      sheet.getRange(1, 2).setNumberFormat('@');
-      // Refresh existing data after adding headers
-      const newExistingValues = sheet.getDataRange().getValues();
-      const newExistingDisplayValues = sheet.getDataRange().getDisplayValues();
+      const headers = Object.keys(newData[0]);
+      const dataToWrite = [headers, ...newData.map(row => headers.map(header => row[header] || ''))];
       
-      // Append all data rows since there's nothing to update
-      dataRows.forEach(row => {
-        sheet.appendRow(row);
-        // Set the second column (sum) to plain text format for each row
-        sheet.getRange(sheet.getLastRow(), 2).setNumberFormat('@');
-      });
+      const range = sheet.getRange(1, 1, dataToWrite.length, headers.length);
+      range.setValues(dataToWrite);
       
-      return { 
-        success: true, 
-        processed: dataRows.length,
-        updated: 0,
-        added: dataRows.length,
-        message: `Added headers and appended ${dataRows.length} rows to new sheet ${sheetName}`
+      // Auto-resize columns
+      for (let i = 1; i <= headers.length; i++) {
+        sheet.autoResizeColumn(i);
+      }
+      
+      return {
+        success: true,
+        message: 'New sheet created with data',
+        rowsProcessed: newData.length
       };
     }
-    
-    // Check if first column exists in both datasets
-    const firstColumnHeader = headers[0];
-    if (!existingHeaders.includes(firstColumnHeader)) {
-      return { success: false, error: `First column "${firstColumnHeader}" not found in target sheet headers` };
-    }
-    
-    // Get indices of first column (primary key) in both datasets
-    const keyIndexInNewData = 0; // First column is always the key
-    const keyIndexInExistingData = existingHeaders.indexOf(firstColumnHeader);
-    
-    // Determine which columns contain dates
-    const columnIsDate = existingHeaders.map((_, colIndex) => {
-      const sampleValues = existingValues.slice(1, Math.min(existingValues.length, 11))
-          .map(row => row[colIndex]);
-      const dateCount = sampleValues.filter(val => 
-        val instanceof Date || 
-        (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}(?:\s\d{2}:\d{2})?$/.test(val) && 
-         !isNaN(Date.parse(val)))
-      ).length;
-      return dateCount / sampleValues.length > 0.7; // Require 70% of values to be dates
-    });
 
-    // Process each row from the CSV
-    let updatedCount = 0;
-    let addedCount = 0;
+    // Find key column indices in existing data
+    const keyIndicesInExistingData = keyColumns.map(key => existingHeaders.indexOf(key));
+    if (keyIndicesInExistingData.some(index => index === -1)) {
+      throw new Error('Some key columns not found in existing data');
+    }
+
+    // Find key column indices in new data
+    const newDataHeaders = Object.keys(newData[0]);
+    const keyIndicesInNewData = keyColumns.map(key => newDataHeaders.indexOf(key));
+    if (keyIndicesInNewData.some(index => index === -1)) {
+      throw new Error('Some key columns not found in new data');
+    }
+
+    // Process each new row
+    let updatedRows = 0;
+    let newRows = 0;
     
-    for (const newRow of dataRows) {
-      // Find matching existing row based on first column (primary key)
-      const matchingRowIndex = findMatchingRowByFirstColumn(
-        existingValues, 
-        newRow, 
-        keyIndexInExistingData, 
-        keyIndexInNewData
-      );
+    for (const newRow of newData) {
+      const existingRowIndex = findMatchingRow(newRow, newDataHeaders, keyIndicesInNewData, existingValues, keyIndicesInExistingData);
       
-      if (matchingRowIndex !== -1) {
+      if (existingRowIndex !== -1) {
         // Update existing row
-        for (let i = 0; i < headers.length; i++) {
-          const header = headers[i];
-          const existingColIndex = existingHeaders.indexOf(header);
-          
-          if (existingColIndex !== -1 && newRow[i] !== undefined) {
-            const formattedValue = formatCellValueForSheet(
-              newRow[i], 
-              existingDisplayValues[matchingRowIndex][existingColIndex], 
-              columnIsDate[existingColIndex]
-            );
-            sheet.getRange(matchingRowIndex + 1, existingColIndex + 1).setValue(formattedValue);
-            // Set the second column (sum) to plain text format
-            if (existingColIndex === 1) {
-              sheet.getRange(matchingRowIndex + 1, 2).setNumberFormat('@');
-            }
-          }
-        }
-        updatedCount++;
+        const rowData = newDataHeaders.map(header => newRow[header] || '');
+        const range = sheet.getRange(existingRowIndex + 1, 1, 1, rowData.length);
+        range.setValues([rowData]);
+        updatedRows++;
       } else {
         // Add new row
-        const newRowData = [];
-        for (let i = 0; i < existingHeaders.length; i++) {
-          const header = existingHeaders[i];
-          const newDataIndex = headers.indexOf(header);
-          const value = newDataIndex !== -1 ? formatCellValueForSheet(
-            newRow[newDataIndex], 
-            newRow[newDataIndex], 
-            columnIsDate[i]
-          ) : '';
-          newRowData.push(value);
-        }
-        sheet.appendRow(newRowData);
-        // Set the second column (sum) to plain text format
-        sheet.getRange(sheet.getLastRow(), 2).setNumberFormat('@');
-        addedCount++;
+        const rowData = newDataHeaders.map(header => newRow[header] || '');
+        sheet.appendRow(rowData);
+        newRows++;
       }
     }
-    
-    return { 
-      success: true, 
-      processed: dataRows.length,
-      updated: updatedCount,
-      added: addedCount,
-      message: `Processed ${dataRows.length} rows: ${updatedCount} updated, ${addedCount} added`
+
+    // Auto-resize columns
+    for (let i = 1; i <= newDataHeaders.length; i++) {
+      sheet.autoResizeColumn(i);
+    }
+
+    return {
+      success: true,
+      message: `Data merged successfully`,
+      rowsUpdated: updatedRows,
+      rowsAdded: newRows,
+      totalProcessed: newData.length
     };
-    
-  } catch (err) {
-    return { success: false, error: err.message };
+
+  } catch (error) {
+    Logger.log(`Error merging data: ${error.message}`);
+    return {
+      success: false,
+      error: error.message
+    };
   }
 }
 
-// Helper function to find matching row by first column
-function findMatchingRowByFirstColumn(existingValues, newRow, keyIndexInExistingData, keyIndexInNewData) {
-  const newKeyValue = newRow[keyIndexInNewData];
-  
-  for (let i = 1; i < existingValues.length; i++) { // Start from 1 to skip header row
-    const existingKeyValue = existingValues[i][keyIndexInExistingData];
-    
-    // Compare values (handle different data types)
-    if (String(existingKeyValue) === String(newKeyValue)) {
-      return i; // Return row index (0-based, including header)
-    }
-  }
-  
-  return -1; // No match found
-}
-
-// Format cell value for writing to sheet
-function formatCellValueForSheet(value, displayValue, isDateColumn) {
-  if (!value) return '';
-
-  // Handle dates
-  if (isDateColumn) {
-    const date = new Date(value);
-    if (!isNaN(date.getTime())) {
-      return date;
-    }
-  }
-
-  // Handle financial numbers (strings with commas or high-precision decimals)
-  if (typeof value === 'string' && value.includes(',')) {
-    // Preserve strings with commas as-is (e.g., "980,698,339,174.07")
-    return value.replace(/"/g, ''); // Remove quotes if present
-  }
-
-  // Try to parse numbers (only for strings without commas or actual numbers)
-  if (typeof value === 'string' && !isNaN(parseFloat(value)) && value.trim() !== '') {
-    // Check if the string has decimal places or is a simple integer
-    const numValue = parseFloat(value);
-    const strValue = value.trim();
-    if (strValue.includes('.') || strValue.includes('e')) {
-      // Preserve decimal precision for floats
-      return strValue; // Keep as string to avoid precision loss
-    }
-    return numValue; // Convert to number for integers
-  }
-
-  // Handle actual numbers
-  if (typeof value === 'number' && !isNaN(value)) {
-    return value; // Preserve as number
-  }
-
-  // Return as string for other cases
-  return String(value);
-}
-
-// Helper function to check if value is likely numeric (preserve existing implementation)
-function isLikelyNumeric(value) {
-  return !isNaN(value) && !isNaN(parseFloat(value));
-}
-
-// Helper function to find matching row based on key columns
-function findMatchingRow(existingData, newRow, keyIndicesInExistingData, keyIndicesInNewData) {
-  for (let i = 1; i < existingData.length; i++) { // Start from 1 to skip header
+// Helper function to find matching row in existing data
+function findMatchingRow(newRow, newDataHeaders, keyIndicesInNewData, existingValues, keyIndicesInExistingData) {
+  for (let i = 1; i < existingValues.length; i++) { // Skip header row
     let isMatch = true;
     
-    for (let j = 0; j < keyIndicesInExistingData.length; j++) {
-      const existingColIndex = keyIndicesInExistingData[j];
-      const newDataColIndex = keyIndicesInNewData[j];
+    for (let j = 0; j < keyIndicesInNewData.length; j++) {
+      const newKeyIndex = keyIndicesInNewData[j];
+      const existingKeyIndex = keyIndicesInExistingData[j];
       
-      if (existingColIndex === -1 || newDataColIndex === -1) {
-        isMatch = false;
-        break;
-      }
+      if (newKeyIndex === -1 || existingKeyIndex === -1) continue;
       
-      const existingValue = formatCellValue(existingData[i][existingColIndex], existingData[i][existingColIndex], false, '');
-      const newValue = formatCellValue(newRow[newDataColIndex], newRow[newDataColIndex], false, '');
+      const existingValue = formatCellValue(existingValues[i][existingKeyIndex], existingValues[i][existingKeyIndex], false, '');
+      const newValue = formatCellValue(newRow[newDataHeaders[newKeyIndex]], newRow[newDataHeaders[newKeyIndex]], false, '');
       
       if (existingValue !== newValue) {
         isMatch = false;
@@ -426,256 +360,11 @@ function test() {
   });
 }
 
-// ======= CENTRALIZED SYMBOL MANAGEMENT =======
-/**
- * Get the centralized symbols list from the env tab
- * @return {Array} Array of symbol strings
- */
-function getCentralizedSymbols() {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const envSheet = ss.getSheetByName('env');
-    
-    if (!envSheet) {
-      // Create the env sheet if it doesn't exist
-      return createEnvSheet();
-    }
-    
-    const dataRange = envSheet.getDataRange();
-    const values = dataRange.getValues();
-    
-    if (values.length <= 1) {
-      // Only header row exists, populate with default symbols
-      return populateDefaultSymbols(envSheet);
-    }
-    
-    // Get symbols from the first column (Symbols column)
-    const symbols = values.slice(1, values.length).map(row => row[0]).filter(symbol => symbol && symbol.toString().trim() !== '');
-    
-    if (symbols.length === 0) {
-      // No symbols found, populate with default symbols
-      return populateDefaultSymbols(envSheet);
-    }
-    
-    return symbols;
-  } catch (error) {
-    console.error('Error getting centralized symbols:', error);
-    // Fallback to default symbols if there's an error
-    return getDefaultSymbols();
+// Helper function to compare arrays
+function arraysEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
   }
-}
-
-/**
- * Create the env sheet with Symbols column
- * @return {Array} Array of default symbols
- */
-function createEnvSheet() {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const envSheet = ss.insertSheet('env');
-    
-    // Set up headers
-    envSheet.getRange(1, 1).setValue('Symbols');
-    envSheet.getRange(1, 1).setFontWeight('bold');
-    
-    // Populate with default symbols
-    return populateDefaultSymbols(envSheet);
-  } catch (error) {
-    console.error('Error creating env sheet:', error);
-    return getDefaultSymbols();
-  }
-}
-
-/**
- * Populate the env sheet with default symbols
- * @param {Sheet} envSheet - The env sheet to populate
- * @return {Array} Array of default symbols
- */
-function populateDefaultSymbols(envSheet) {
-  try {
-    const defaultSymbols = getDefaultSymbols();
-    
-    // Clear existing data (except header)
-    if (envSheet.getLastRow() > 1) {
-      envSheet.getRange(2, 1, envSheet.getLastRow() - 1, 1).clear();
-    }
-    
-    // Add symbols to the sheet
-    if (defaultSymbols.length > 0) {
-      const symbolRange = envSheet.getRange(2, 1, defaultSymbols.length, 1);
-      symbolRange.setValues(defaultSymbols.map(symbol => [symbol]));
-    }
-    
-    // Auto-resize column
-    envSheet.autoResizeColumn(1);
-    
-    console.log(`Populated env sheet with ${defaultSymbols.length} symbols`);
-    return defaultSymbols;
-  } catch (error) {
-    console.error('Error populating default symbols:', error);
-    return getDefaultSymbols();
-  }
-}
-
-/**
- * Get the default symbols list (consolidated from all schedulers)
- * @return {Array} Array of default symbols
- */
-function getDefaultSymbols() {
-  return [
-    '1INCH','AAVE','ACE','ACH','ACS','ADA','AEG','AERGO','AERO','AFG','AGLD','AIOZ','AITECH','AKT','ALGO','ALICE','AMB','AMP','ANKR','APE','APP','APT','AR','ARB','ARC','ARCA','ARKM','ASTR','ATH','ATOM','AUCTION','AURORA','AURY','AVA','AVAIL','AVAX','AXS','AZERO','BABYDOGE','BAL','BAN','BB','BBL','BCH','BCUT','BICO','BIGTIME','BLAST','BLOCK','BLUR','BNB','BOB','BOBA','BOME','BONK','BRAWL','BRETT','BSV','BTC','BTT','C98','CAKE','CARV','CAS','CAT','CATI','CATS','CELO','CELR','CFG','CFX','CGPT','CHILLGUY','CHZ','CKB','COOKIE','COQ','CPOOL','CRV','CSIX','CSPR','CTA','CTC','CVC','CVX','CXT','CYBER','DAI','DASH','DBR','DCK','DCR','DEEP','DEFI','DEGEN','DEXE','DGB','DMAIL','DOG','DOGE','DOGS','DOT','DRIFT','DYDX','DYM','EDU','EGLD','EGO','EIGEN','ELA','ELON','ENA','ENS','EOS','ERTHA','ETC','ETH','ETHFI','ETHW','EUL','EVER','F','FET','FIDA','FIL','FIRE','FITFI','FLIP','FLOKI','FLOW','FLR','FLUX','FORTH','FOXY','FRED','FTT','G','G3','GALA','GAME','GIGA','GLM','GLMR','GMRX','GMT','GMX','GODS','GRASS','GRT','GST','GTAI','GTC','HBAR','HFT','HIFI','HLG','HMSTR','HNT','HTX','HYPE','ICP','ICX','ID','ILV','IMX','INJ','INSP','IO','IOST','IRL','IRR','IZI','JASMY','JST','JTO','JUP','KAIA','KARATE','KAS','KAVA','KCS','KDA','KMNO','KSM','L3','LADYS','LAI','LAYER','LBR','LDO','LFT','LINK','LL','LMWR','LOOKS','LOOM','LPT','LQTY','LRC','LTC','LUCE','LUNA','LUNC','MAGIC','MAJOR','MAK','MANA','MANTA','MASA','MASK','MAVIA','MDT','ME','MELANIA','MEME','MEMEFI','MERL','MEW','MICHI','MIGGLES','MINA','MKR','MLK','MNT','MOCA','MOG','MON','MOODENG','MORPHO','MOVE','MOVR','MOZ','MPLX','MV','MXM','MYRIA','MYRO','NAKA','NAVX','NEAR','NEIRO','NEIROCTO','NEO','NEON','NFT','NGL','NIBI','NLK','NOT','NOTAI','NRN','NS','NYM','OAS','OBI','OGN','OM','OMNI','ONDO','ONE','OP','ORAI','ORBS','ORDER','ORDI','PAXG','PBUX','PEAQ','PENDLE','PEOPLE','PEPE','PERP','PIP','PIXEL','PNUT','POKT','POL','PONKE','POPCAT','PORTAL','PRCL','PSTAKE','PUFFER','PUMLX','PYTH','PYUSD','QKC','QNT','QORPO','QTUM','RACA','RATS','RAY','RDNT','REEF','REN','RENDER','RIO','RNDR','ROOT','ROSE','RPK','RPL','RSR','RUNE','RVN','S','SAFE','SAND','SAROS','SATS','SCA','SCR','SCRT','SD','SEI','SFP','SFUND','SHIB','SHRAP','SIDUS','SKL','SKY','SLF','SLP','SMILE','SNX','SOCIAL','SOL','SON','SPX','SQD','SQR','SSV','STG','STRAX','STRK','STX','SUI','SUN','SUNDOG','SUPRA','SUSHI','SWEAT','SWELL','SYRUP','TADA','TAIKO','TAO','TAP','TEL','TENET','THETA','TIA','TIME','TNSR','TOKEN','TOKO','TOMI','TON','TOSHI','TRB','TRUMP','TRVL','TRX','TST','TT','TURBO','TURBOS','TWT','ULTI','UMA','UNI','USDC','USDT','USTC','UXLINK','VANRY','VELO','VENOM','VET','VINU','VIRTUAL','VRA','VRTX','W','WAVES','WBTC','WELL','WEMIX','WEN','WIF','WLD','WLKN','WMTX','WOO','X','XAI','XAVA','XCAD','XCH','XCN','XDC','XEC','XEM','XETA','XION','XLM','XMR','XNO','XPR','XR','XRP','XTZ','XYM','YFI','ZBCN','ZEC','ZEN','ZEND','ZEREBRO','ZETA','ZEX','ZIL','ZK','ZKF','ZKJ','ZKL','ZRC','ZRO','ZRX'
-  ];
-}
-
-/**
- * Update the centralized symbols list
- * @param {Array} newSymbols - Array of new symbols to set
- * @return {boolean} Success status
- */
-function updateCentralizedSymbols(newSymbols) {
-  try {
-    if (!Array.isArray(newSymbols)) {
-      throw new Error('newSymbols must be an array');
-    }
-    
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    let envSheet = ss.getSheetByName('env');
-    
-    if (!envSheet) {
-      envSheet = createEnvSheet();
-    }
-    
-    // Clear existing data (except header)
-    if (envSheet.getLastRow() > 1) {
-      envSheet.getRange(2, 1, envSheet.getLastRow() - 1, 1).clear();
-    }
-    
-    // Add new symbols to the sheet
-    if (newSymbols.length > 0) {
-      const symbolRange = envSheet.getRange(2, 1, newSymbols.length, 1);
-      symbolRange.setValues(newSymbols.map(symbol => [symbol]));
-    }
-    
-    // Auto-resize column
-    envSheet.autoResizeColumn(1);
-    
-    console.log(`Updated centralized symbols list with ${newSymbols.length} symbols`);
-    return true;
-  } catch (error) {
-    console.error('Error updating centralized symbols:', error);
-    return false;
-  }
-}
-
-/**
- * Add a single symbol to the centralized list
- * @param {string} symbol - Symbol to add
- * @return {boolean} Success status
- */
-function addSymbolToCentralizedList(symbol) {
-  try {
-    if (!symbol || typeof symbol !== 'string') {
-      throw new Error('symbol must be a non-empty string');
-    }
-    
-    const currentSymbols = getCentralizedSymbols();
-    const upperSymbol = symbol.toUpperCase().trim();
-    
-    if (currentSymbols.includes(upperSymbol)) {
-      console.log(`Symbol ${upperSymbol} already exists in centralized list`);
-      return true;
-    }
-    
-    const newSymbols = [...currentSymbols, upperSymbol];
-    return updateCentralizedSymbols(newSymbols);
-  } catch (error) {
-    console.error('Error adding symbol to centralized list:', error);
-    return false;
-  }
-}
-
-/**
- * Remove a symbol from the centralized list
- * @param {string} symbol - Symbol to remove
- * @return {boolean} Success status
- */
-function removeSymbolFromCentralizedList(symbol) {
-  try {
-    if (!symbol || typeof symbol !== 'string') {
-      throw new Error('symbol must be a non-empty string');
-    }
-    
-    const currentSymbols = getCentralizedSymbols();
-    const upperSymbol = symbol.toUpperCase().trim();
-    
-    if (!currentSymbols.includes(upperSymbol)) {
-      console.log(`Symbol ${upperSymbol} not found in centralized list`);
-      return true;
-    }
-    
-    const newSymbols = currentSymbols.filter(s => s !== upperSymbol);
-    return updateCentralizedSymbols(newSymbols);
-  } catch (error) {
-    console.error('Error removing symbol from centralized list:', error);
-    return false;
-  }
-}
-
-/**
- * Initialize the centralized symbol management system
- * This function should be run once to set up the system
- */
-function initializeCentralizedSymbols() {
-  try {
-    console.log('Initializing centralized symbol management system...');
-    
-    // Get or create the env sheet and populate with default symbols
-    const symbols = getCentralizedSymbols();
-    
-    console.log(`Centralized symbol management system initialized with ${symbols.length} symbols`);
-    console.log('Symbols:', symbols.slice(0, 10).join(', ') + (symbols.length > 10 ? '...' : ''));
-    
-    return {
-      success: true,
-      symbolCount: symbols.length,
-      symbols: symbols
-    };
-  } catch (error) {
-    console.error('Error initializing centralized symbols:', error);
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-}
-
-/**
- * Simple setup function for users to run once
- * This will create the env tab and populate it with the default symbols
- */
-function setupCentralizedSymbols() {
-  try {
-    console.log('🚀 Setting up centralized symbol management system...');
-    
-    const result = initializeCentralizedSymbols();
-    
-    if (result.success) {
-      console.log('✅ Setup completed successfully!');
-      console.log(`📊 Created env tab with ${result.symbolCount} symbols`);
-      console.log('🔧 All schedulers will now use the centralized symbol list');
-      console.log('');
-      console.log('💡 To add/remove symbols, edit the "Symbols" column in the "env" tab');
-      console.log('💡 Or use the functions: addSymbolToCentralizedList() and removeSymbolFromCentralizedList()');
-    } else {
-      console.log('❌ Setup failed:', result.error);
-    }
-    
-    return result;
-  } catch (error) {
-    console.error('❌ Setup error:', error);
-    return {
-      success: false,
-      error: error.message
-    };
-  }
+  return true;
 }
