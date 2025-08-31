@@ -104,9 +104,9 @@ function fetchAndUpdatePrices(tokenList) {
     Logger.log("Slug prefetch error: " + slugErr);
   }
 
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("CMC Prices");
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Coin Market Cap");
   if (!sheet) {
-    sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("CMC Prices");
+    sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("Coin Market Cap");
     sheet.appendRow(["Date", "Token", "Price"]);
   }
 
