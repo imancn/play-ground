@@ -139,9 +139,10 @@ function run_cold_wallets_balances_updater() {
   try {
     Logger.log("🚀 Starting Cold Wallets Balance Update...");
     
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Cold Wallets');
+    let sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Cold Wallets');
     if(!sheet) {
-      throw new Error('Sheet "Cold Wallets" not found!');
+      sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet('Cold Wallets');
+      Logger.log("📋 Created new 'Cold Wallets' sheet");
     }
 
     const balances = {};
